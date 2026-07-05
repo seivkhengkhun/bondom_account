@@ -11,6 +11,8 @@ database.
 
 import asyncio
 import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from contextlib import suppress
 
 from app.api.main import app
@@ -19,6 +21,7 @@ from shared.config import settings
 
 logger = logging.getLogger(__name__)
 _bot_task: asyncio.Task[None] | None = None
+_previous_lifespan = app.router.lifespan_context
 
 
 def _log_bot_task_result(task: asyncio.Task[None]) -> None:
@@ -30,28 +33,28 @@ def _log_bot_task_result(task: asyncio.Task[None]) -> None:
         logger.exception("Telegram bot task crashed.")
 
 
-@app.on_event("startup")
-async def start_bot() -> None:
-    """Start Telegram polling alongside the API."""
+@asynccontextmanager
+async def combined_lifespan(app_instance) -> AsyncIterator[None]:
+    """Run the API lifespan and Telegram polling in the same process."""
     global _bot_task
-    if not settings.bot_token:
-        logger.warning("BOT_TOKEN is not set — Telegram bot disabled.")
-        return
-    if _bot_task is None or _bot_task.done():
-        _bot_task = asyncio.create_task(run_bot())
-        _bot_task.add_done_callback(_log_bot_task_result)
+    async with _previous_lifespan(app_instance):
+        if not settings.bot_token:
+            logger.warning("BOT_TOKEN is not set — Telegram bot disabled.")
+        elif _bot_task is None or _bot_task.done():
+            _bot_task = asyncio.create_task(run_bot())
+            _bot_task.add_done_callback(_log_bot_task_result)
+
+        try:
+            yield
+        finally:
+            if _bot_task is not None:
+                _bot_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await _bot_task
+                _bot_task = None
 
 
-@app.on_event("shutdown")
-async def stop_bot() -> None:
-    """Stop Telegram polling cleanly when the web process exits."""
-    global _bot_task
-    if _bot_task is None:
-        return
-    _bot_task.cancel()
-    with suppress(asyncio.CancelledError):
-        await _bot_task
-    _bot_task = None
+app.router.lifespan_context = combined_lifespan
 
 
 if __name__ == "__main__":
