@@ -70,6 +70,12 @@ class UserRow:
 
 
 class AdminState(rx.State):
+    # Auth — every mutating handler re-checks ``authed`` server-side, so
+    # the gate holds even against hand-crafted websocket events.
+    authed: bool = False
+    password_input: str = ""
+    login_message: str = ""
+
     # KPIs
     stat_users: int = 0
     stat_orders: int = 0
@@ -107,9 +113,34 @@ class AdminState(rx.State):
     manage_message: str = ""
 
     # ----------------------------------------------------------------- #
+    # Auth
+    # ----------------------------------------------------------------- #
+    def set_password_input(self, v: str) -> None:
+        self.password_input = v
+
+    async def login(self) -> None:
+        if not settings.admin_password:
+            self.login_message = (
+                "ADMIN_PASSWORD is not set in .env on the server."
+            )
+            return
+        if self.password_input == settings.admin_password:
+            self.authed = True
+            self.login_message = ""
+            self.password_input = ""
+            await self.load_all()
+        else:
+            self.login_message = "Wrong password."
+
+    def logout(self) -> None:
+        self.authed = False
+
+    # ----------------------------------------------------------------- #
     # Loading
     # ----------------------------------------------------------------- #
     async def load_all(self) -> None:
+        if not self.authed:
+            return
         async with AsyncSessionLocal() as session:
             stats = await services.get_store_stats(session)
             overviews = await services.list_product_overviews(session)
@@ -218,6 +249,8 @@ class AdminState(rx.State):
         self.new_warranty = v
 
     async def add_product(self) -> None:
+        if not self.authed:
+            return
         try:
             payload = ProductCreate(
                 name=self.new_name.strip(),
@@ -240,6 +273,8 @@ class AdminState(rx.State):
     # Bot settings
     # ----------------------------------------------------------------- #
     async def set_bot_show_stock_toggle(self, enabled: bool) -> None:
+        if not self.authed:
+            return
         async with AsyncSessionLocal() as session:
             await services.set_bot_show_stock(session, enabled)
         self.bot_show_stock = enabled
@@ -248,11 +283,15 @@ class AdminState(rx.State):
     # Product controls: price, visibility, clear stock
     # ----------------------------------------------------------------- #
     async def toggle_product(self, product_id: int, is_active: bool) -> None:
+        if not self.authed:
+            return
         async with AsyncSessionLocal() as session:
             await services.set_product_active(session, product_id, is_active)
         await self.load_all()
 
     async def clear_stock(self, product_id: int) -> None:
+        if not self.authed:
+            return
         async with AsyncSessionLocal() as session:
             n = await services.delete_available_inventory(session, product_id)
         self.upload_message = f"🗑 Removed {n} unsold item(s) from product #{product_id}."
@@ -262,6 +301,8 @@ class AdminState(rx.State):
     # User control: suspend / reactivate (bot checks on next purchase)
     # ----------------------------------------------------------------- #
     async def toggle_user(self, user_id: int, is_active: bool) -> None:
+        if not self.authed:
+            return
         try:
             async with AsyncSessionLocal() as session:
                 await services.toggle_user_status(session, user_id, is_active)
@@ -275,12 +316,16 @@ class AdminState(rx.State):
         await self.load_all()
 
     async def block_user_forever(self, user_id: int) -> None:
+        if not self.authed:
+            return
         async with AsyncSessionLocal() as session:
             await services.block_user_forever(session, user_id)
         self.users_message = f"🔒 User #{user_id} permanently blocked."
         await self.load_all()
 
     async def unblock_user(self, user_id: int) -> None:
+        if not self.authed:
+            return
         async with AsyncSessionLocal() as session:
             await services.unblock_user(session, user_id)
         self.users_message = f"✅ User #{user_id} unblocked and reactivated."
@@ -290,6 +335,8 @@ class AdminState(rx.State):
         self.user_adjust_amount = value
 
     async def credit_user_wallet(self, user_id: int) -> None:
+        if not self.authed:
+            return
         try:
             amount = Decimal(self.user_adjust_amount or "0")
         except InvalidOperation:
@@ -308,6 +355,8 @@ class AdminState(rx.State):
         await self.load_all()
 
     async def debit_user_wallet(self, user_id: int) -> None:
+        if not self.authed:
+            return
         try:
             amount = Decimal(self.user_adjust_amount or "0")
         except InvalidOperation:
@@ -373,6 +422,8 @@ class AdminState(rx.State):
         return 0
 
     async def handle_upload(self, files: list[rx.UploadFile]) -> None:
+        if not self.authed:
+            return
         if not files:
             self.upload_message = "⚠ No file selected."
             return
@@ -401,6 +452,8 @@ class AdminState(rx.State):
         await self.load_all()
 
     async def add_stock_to_selected(self) -> None:
+        if not self.authed:
+            return
         product_id = self._selected_product_id()
         if product_id <= 0:
             self.manage_message = "⚠ Select a product first."
@@ -420,6 +473,8 @@ class AdminState(rx.State):
         await self.load_all()
 
     async def rename_selected_product(self) -> None:
+        if not self.authed:
+            return
         product_id = self._selected_product_id()
         if product_id <= 0:
             self.manage_message = "⚠ Select a product first."
@@ -435,6 +490,8 @@ class AdminState(rx.State):
         await self.load_all()
 
     async def update_selected_price(self) -> None:
+        if not self.authed:
+            return
         product_id = self._selected_product_id()
         if product_id <= 0:
             self.manage_message = "⚠ Select a product first."
@@ -455,6 +512,8 @@ class AdminState(rx.State):
         await self.load_all()
 
     async def update_selected_warranty(self) -> None:
+        if not self.authed:
+            return
         product_id = self._selected_product_id()
         if product_id <= 0:
             self.manage_message = "⚠ Select a product first."
@@ -479,6 +538,8 @@ class AdminState(rx.State):
         await self.load_all()
 
     async def save_client_note(self) -> None:
+        if not self.authed:
+            return
         product_id = self._selected_product_id()
         if product_id <= 0:
             self.manage_message = "⚠ Select a product first."
@@ -496,6 +557,8 @@ class AdminState(rx.State):
         await self.load_all()
 
     async def delete_selected_product(self) -> None:
+        if not self.authed:
+            return
         product_id = self._selected_product_id()
         if product_id <= 0:
             self.manage_message = "⚠ Select a product first."
@@ -509,6 +572,8 @@ class AdminState(rx.State):
         await self.load_all()
 
     async def clear_orders_now(self) -> None:
+        if not self.authed:
+            return
         async with AsyncSessionLocal() as session:
             deleted = await services.clear_all_orders_for_fresh_revenue(session)
         self.orders_message = (
@@ -517,6 +582,8 @@ class AdminState(rx.State):
         await self.load_all()
 
     async def publish_announcement(self) -> None:
+        if not self.authed:
+            return
         message = self.announcement_text.strip()
         if not message:
             self.announcement_message = "⚠ Write announcement message first."
@@ -982,14 +1049,42 @@ def manage_selected_product_card() -> rx.Component:
     )
 
 
-@rx.page(route="/", title="Bondom Account — Admin", on_load=AdminState.load_all)
-def index() -> rx.Component:
+def login_view() -> rx.Component:
+    return rx.center(
+        rx.vstack(
+            rx.heading("🔐 Bondom Account — Admin", size="6"),
+            rx.input(
+                placeholder="Admin password",
+                type="password",
+                value=AdminState.password_input,
+                on_change=AdminState.set_password_input,
+                width="100%",
+            ),
+            rx.button("Sign in", on_click=AdminState.login, width="100%"),
+            rx.cond(
+                AdminState.login_message != "",
+                rx.text(AdminState.login_message, color_scheme="red"),
+            ),
+            spacing="4",
+            width="20em",
+        ),
+        height="80vh",
+    )
+
+
+def dashboard_view() -> rx.Component:
     return rx.container(
         rx.vstack(
             rx.hstack(
                 rx.heading("🛍 Bondom Account — Admin", size="7"),
                 rx.spacer(),
                 rx.button("↻ Refresh", on_click=AdminState.load_all),
+                rx.button(
+                    "Sign out",
+                    on_click=AdminState.logout,
+                    variant="soft",
+                    color_scheme="gray",
+                ),
                 width="100%",
                 align="center",
             ),
@@ -1016,6 +1111,11 @@ def index() -> rx.Component:
         ),
         size="4",
     )
+
+
+@rx.page(route="/", title="Bondom Account — Admin", on_load=AdminState.load_all)
+def index() -> rx.Component:
+    return rx.cond(AdminState.authed, dashboard_view(), login_view())
 
 
 app = rx.App()

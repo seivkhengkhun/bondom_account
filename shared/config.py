@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     merchant_city: str = "Phnom Penh"
     bakong_api_base: str = "https://api-bakong.nbc.gov.kh"
 
+    # Reflex admin panel — empty password means nobody can log in.
+    admin_password: str = ""
+
     model_config = SettingsConfigDict(
         # Use an absolute path so API/bot/admin load the same .env regardless of cwd.
         env_file=str(ENV_FILE),
