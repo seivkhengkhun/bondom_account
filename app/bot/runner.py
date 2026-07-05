@@ -35,6 +35,10 @@ async def run_bot() -> None:
     dispatcher = build_dispatcher()
     logger.info("Starting Telegram bot polling…")
     try:
+        await bot.delete_webhook(drop_pending_updates=False)
         await dispatcher.start_polling(bot)
+    except Exception:
+        logger.exception("Telegram bot polling failed.")
+        raise
     finally:
         await bot.session.close()

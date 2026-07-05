@@ -21,6 +21,15 @@ logger = logging.getLogger(__name__)
 _bot_task: asyncio.Task[None] | None = None
 
 
+def _log_bot_task_result(task: asyncio.Task[None]) -> None:
+    try:
+        task.result()
+    except asyncio.CancelledError:
+        logger.info("Telegram bot task cancelled.")
+    except Exception:
+        logger.exception("Telegram bot task crashed.")
+
+
 @app.on_event("startup")
 async def start_bot() -> None:
     """Start Telegram polling alongside the API."""
@@ -30,6 +39,7 @@ async def start_bot() -> None:
         return
     if _bot_task is None or _bot_task.done():
         _bot_task = asyncio.create_task(run_bot())
+        _bot_task.add_done_callback(_log_bot_task_result)
 
 
 @app.on_event("shutdown")
