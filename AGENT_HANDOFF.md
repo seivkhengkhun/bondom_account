@@ -1,0 +1,115 @@
+# Bondom Account - Agent Handoff
+
+## Current Situation
+- Project runs as one process: FastAPI + Telegram bot in one Python runtime.
+- Local testing works for app startup and bot startup.
+- VPS deployment is partially working:
+	- API is reachable at `/docs`.
+	- Telegram bot receives commands and order flow starts.
+	- Payment verification is still returning "not detected yet" in bot check flow.
+- User also struggled with terminal/pager exits on VPS (less/nano/tail foreground hangs).
+
+## Important Commits Already Pushed
+- `c98473c` - Log Telegram bot startup failures.
+- `087b513` - Start Telegram bot in app lifespan.
+- `117cd51` - Avoid double-importing app on startup.
+- `51cc214` - Track bot payment tasks and improve payment logs.
+
+## Key Code Changes Made
+
+### 1) Startup/lifespan fixes
+- File: `main.py`
+	- Wrapped existing API lifespan with a combined lifespan that also starts Telegram polling.
+	- Added bot task crash logging callback.
+	- Changed `uvicorn.run("main:app", ...)` to `uvicorn.run(app, ...)` under `if __name__ == "__main__"`.
+	- Reason: avoid double import and aiogram "Router is already attached" crash.
+
+### 2) Bot runner robustness
+- File: `app/bot/runner.py`
+	- Added `delete_webhook()` before polling.
+	- Added exception logging around polling.
+
+### 3) Payment flow diagnostics/reliability
+- File: `shared/payment_service.py`
+	- Added explicit log line of Bakong check result (`PAID`/`UNPAID`).
+- File: `app/bot/handlers.py`
+	- Added tracked background task set for payment/top-up watchers.
+	- Added done-callback logging for task failures/cancellations.
+
+## What Has Been Verified
+- Local compile/import smoke checks pass for:
+	- `main.py`
+	- `run_all.py`
+	- `app/bot/runner.py`
+	- `app/bot/handlers.py`
+	- `app/api/main.py`
+	- `shared/payment_service.py`
+- Local payment service logic works in `PAYMENT_DEV_MODE=true`.
+- On VPS, token validity for Telegram was confirmed via `getMe` earlier.
+
+## Known Problems Still Open
+
+### A) Real Bakong payment check still fails
+- Symptom from bot UI: "Payment not detected yet — give it a few seconds and try again."
+- Logs showed endpoints returning:
+	- `POST /payments/{id}/check` -> `402 Payment Required`
+	- `POST /payments/create` -> `400 Bad Request` (likely malformed API request body from manual docs testing)
+	- `GET /payments/create` -> `405 Method Not Allowed` (expected, endpoint is POST-only)
+- This means app is running but Bakong check for that md5 is still returning unpaid or not matching paid transaction yet.
+
+### B) VPS command usage confusion
+- User repeatedly ran `python3 main.py` instead of venv python and got `ModuleNotFoundError`.
+- Correct command is always absolute venv python path on VPS.
+
+### C) systemd unit setup remains unreliable
+- Service file got malformed multiple times because multiline command paste collapsed into one line.
+- Runtime currently often done via `nohup` as workaround.
+
+## What the Next Agent Should Do (Priority Order)
+
+1. **Stabilize runtime command on VPS**
+	 - Use only:
+	 - `/home/ubuntu/bondom_account/.venv/bin/python /home/ubuntu/bondom_account/main.py`
+	 - Then background mode:
+	 - `nohup /home/ubuntu/bondom_account/.venv/bin/python /home/ubuntu/bondom_account/main.py >/tmp/bondom.log 2>&1 &`
+
+2. **Collect authoritative payment debug evidence on VPS**
+	 - Query latest payments/orders rows from `store.db`.
+	 - For latest payment md5, run Bakong library checks directly:
+		 - `check_payment(md5)`
+		 - `get_payment(md5)`
+	 - Confirm `.env` has expected `PAYMENT_DEV_MODE`, `BAKONG_TOKEN`, `BAKONG_ACCOUNT_ID`.
+
+3. **Differentiate two flows clearly**
+	 - Bot flow (`chk:` callback) using latest payment of that order.
+	 - Manual docs API calls (`/payments/create` with JSON body) which user may be invoking incorrectly.
+
+4. **If payment is still unpaid while user claims transfer done**
+	 - Investigate merchant account/token validity at Bakong side.
+	 - Validate payer actually paid exact QR of same `md5` and amount before expiry.
+	 - Consider polling interval or verification retries UX messaging improvements.
+
+5. **Only after payment is confirmed stable, fix systemd cleanly**
+	 - Recreate `/etc/systemd/system/bondom.service` line-by-line safely.
+	 - `daemon-reload`, `enable --now`, verify `active (running)`.
+
+## Commands Frequently Needed
+
+### Quick app restart (VPS)
+1. `cd ~/bondom_account`
+2. `pkill -f '/home/ubuntu/bondom_account/main.py'`
+3. `nohup /home/ubuntu/bondom_account/.venv/bin/python /home/ubuntu/bondom_account/main.py >/tmp/bondom.log 2>&1 &`
+4. `tail -n 120 /tmp/bondom.log`
+
+### Terminal escape (when stuck)
+1. `q` (exit pager)
+2. `Ctrl+C`
+3. `reset`
+
+## Repo State Notes
+- Working tree likely still has unrelated local changes such as `store.db` and `.vscode/`.
+- Do not commit those unless explicitly requested.
+
+## Security Note
+- Sensitive tokens were exposed in chat/screenshots previously.
+- Recommend rotating `BOT_TOKEN` and `BAKONG_TOKEN` after stabilization.
