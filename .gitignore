@@ -1,0 +1,12 @@
+# Secrets — never commit real tokens
+.env
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Reflex build artifacts
+app/web/.web/
+app/web/.states/
+assets/external/
