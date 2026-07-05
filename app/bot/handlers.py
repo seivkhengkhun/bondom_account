@@ -32,6 +32,22 @@ from shared.schemas import OrderCreate
 
 logger = logging.getLogger(__name__)
 router = Router()
+_background_tasks: set[asyncio.Task[object]] = set()
+
+
+def _track_background_task(task: asyncio.Task[object], label: str) -> None:
+    _background_tasks.add(task)
+
+    def _done(done_task: asyncio.Task[object]) -> None:
+        _background_tasks.discard(done_task)
+        try:
+            done_task.result()
+        except asyncio.CancelledError:
+            logger.info("Background task canceled: %s", label)
+        except Exception:
+            logger.exception("Background task failed: %s", label)
+
+    task.add_done_callback(_done)
 
 
 class PurchaseState(StatesGroup):
@@ -242,7 +258,10 @@ async def msg_topup_amount(message: Message, state: FSMContext) -> None:
         reply_markup=kb,
     )
 
-    asyncio.create_task(payment_service.poll_wallet_topup_until_paid(topup.id))
+    _track_background_task(
+        asyncio.create_task(payment_service.poll_wallet_topup_until_paid(topup.id)),
+        f"wallet-topup:{topup.id}",
+    )
 
 
 @router.callback_query(F.data.startswith("tchk:"))
@@ -472,13 +491,16 @@ async def msg_buy_quantity(message: Message, state: FSMContext) -> None:
             ],
         ]
     )
-    asyncio.create_task(
-        _watch_payment_and_auto_deliver(
-            message.bot,
-            message.chat.id,
-            order.id,
-            payment.id,
-        )
+    _track_background_task(
+        asyncio.create_task(
+            _watch_payment_and_auto_deliver(
+                message.bot,
+                message.chat.id,
+                order.id,
+                payment.id,
+            )
+        ),
+        f"order-payment:{order.id}:{payment.id}",
     )
     qr_png = payment_service.render_qr_png(payment.qr_string)
     photo = BufferedInputFile(qr_png, filename=f"khqr_order_{order.id}.png")

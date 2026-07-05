@@ -186,6 +186,7 @@ async def verify_payment(md5_hash: str) -> bool:
         logger.exception("Bakong verification failed for md5=%s", md5_hash)
         return False
 
+    logger.info("Bakong verification status for md5=%s: %s", md5_hash, status)
     return status == "PAID"
 
 
