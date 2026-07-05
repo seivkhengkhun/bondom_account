@@ -34,4 +34,7 @@ async def run_bot() -> None:
     )
     dispatcher = build_dispatcher()
     logger.info("Starting Telegram bot polling…")
-    await dispatcher.start_polling(bot)
+    try:
+        await dispatcher.start_polling(bot)
+    finally:
+        await bot.session.close()

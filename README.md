@@ -79,26 +79,32 @@ works without a Bakong merchant account.
   inventory from orders whose payments expired if you want strict
   anti-hoarding.
 
-## Render deployment (managed app + managed database)
+## One-file deployment (recommended)
 
-This repository includes a Render blueprint file: `render.yaml`.
+The app now runs from a single Python entrypoint: [`main.py`](main.py).
 
-It provisions:
-- one managed PostgreSQL database (`bondom-db`)
-- one API web service (`bondom-api`)
-- one bot worker service (`bondom-bot`)
-- one admin web service (`bondom-admin`)
+It starts:
+- the FastAPI backend
+- the Telegram bot polling loop
 
-Steps:
+So hosting only needs:
+- one Python web service
+- one managed PostgreSQL database
+
+Render setup:
 1. Push this repo to GitHub.
 2. In Render, choose **Blueprint** deployment and select this repository.
-3. Fill secret env vars when prompted:
+3. Render will create the managed PostgreSQL database and one web service.
+4. Fill secret env vars:
    - `BOT_TOKEN`
    - `BAKONG_TOKEN`
    - `BAKONG_ACCOUNT_ID`
-4. Deploy.
+5. Deploy.
+
+Start command used by the blueprint:
+- `uvicorn main:app --host 0.0.0.0 --port $PORT`
 
 Notes:
 - `shared/database.py` auto-converts `postgresql://...` to
   `postgresql+asyncpg://...` for cloud providers that expose sync URLs.
-- Admin service runs Reflex in production single-port mode.
+- The Reflex admin panel is no longer part of the deployment path.
