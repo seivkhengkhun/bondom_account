@@ -50,6 +50,27 @@ def _track_background_task(task: asyncio.Task[object], label: str) -> None:
     task.add_done_callback(_done)
 
 
+async def _verify_payment_or_alert(
+    callback: CallbackQuery, md5: str
+) -> bool | None:
+    """Verify with Bakong; on misconfiguration alert the user and return None.
+
+    PaymentError here means the check itself cannot run (expired token,
+    blocked IP) — showing "not detected yet" would mislead a customer who
+    actually paid.
+    """
+    try:
+        return await payment_service.verify_payment(md5)
+    except payment_service.PaymentError:
+        logger.exception("Bakong verification is misconfigured")
+        await callback.answer(
+            "⚠️ Payment system error on our side — your money is safe. "
+            "Please contact support.",
+            show_alert=True,
+        )
+        return None
+
+
 class PurchaseState(StatesGroup):
     waiting_for_quantity = State()
     waiting_for_topup_amount = State()
@@ -294,7 +315,10 @@ async def cb_check_topup(callback: CallbackQuery) -> None:
             await callback.answer("Top-up session expired.", show_alert=True)
             return
 
-        if not await payment_service.verify_payment(topup.md5):
+        paid = await _verify_payment_or_alert(callback, topup.md5)
+        if paid is None:
+            return
+        if not paid:
             await callback.answer("Payment not detected yet.", show_alert=True)
             return
 
@@ -550,7 +574,10 @@ async def cb_check_payment(callback: CallbackQuery) -> None:
                     show_alert=True,
                 )
                 return
-            if not await payment_service.verify_payment(payment.md5):
+            paid = await _verify_payment_or_alert(callback, payment.md5)
+            if paid is None:
+                return
+            if not paid:
                 await callback.answer(
                     "⏳ Payment not detected yet — give it a few seconds "
                     "and try again.",
@@ -608,7 +635,10 @@ async def cb_cancel_payment(callback: CallbackQuery) -> None:
         if payment is None:
             await callback.answer("No payment session found.", show_alert=True)
             return
-        if await payment_service.verify_payment(payment.md5):
+        paid = await _verify_payment_or_alert(callback, payment.md5)
+        if paid is None:
+            return
+        if paid:
             await callback.answer(
                 "Payment already received. Tap 'I've paid — check'.",
                 show_alert=True,

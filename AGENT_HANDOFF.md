@@ -1,5 +1,30 @@
 # Bondom Account - Agent Handoff
 
+## Update 2026-07-05 (payment root cause found)
+
+- Real Bakong payments were verified WORKING end-to-end from the local
+  machine (Cambodia IP, token renewed 2026-07-05 07:50 UTC): payments #1-3
+  and #5 in local `store.db` are `paid`/`delivered`, and direct
+  `check_transaction_by_md5` calls return `responseCode: 0` with full
+  transaction data. App logic, merchant account, and token are all fine.
+- Root cause of "unpaid" on the VPS: the `bakong-khqr` library maps EVERY
+  nonzero responseCode — including 401 "token expired" and 403 "IP not in
+  Cambodia" — to the string `UNPAID`, so a stale token in the VPS `.env`
+  (or a geo-blocked VPS IP) looks identical to a customer who hasn't paid.
+- Fix shipped: `shared/payment_service.py` now calls the Bakong endpoint
+  directly, logs `http/responseCode/errorCode/message` for every check, and
+  raises `PaymentError` on 401/403/errorCode 6 instead of returning UNPAID.
+  Bot handlers show "⚠️ Payment system error" for those, keeping
+  "not detected yet" only for genuine errorCode 1 (transaction not found).
+- `scripts/vps_payment_diagnose.py` prints a one-line VERDICT on the VPS
+  (token expiry decode, server IP country, DB rows, raw API responses).
+- `deploy/VPS_DEPLOY.md` + `deploy/bondom.service` contain the exact
+  deployment and systemd steps (unit file is copied from the repo, no more
+  paste corruption).
+- Remaining manual steps (need VPS shell — no SSH key/host exists on this
+  Windows machine): `git pull`, paste the fresh `BAKONG_TOKEN` into VPS
+  `.env`, run the diagnostic, test a $0.01 payment, then install systemd.
+
 ## Current Situation
 - Project runs as one process: FastAPI + Telegram bot in one Python runtime.
 - Local testing works for app startup and bot startup.

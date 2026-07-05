@@ -1,0 +1,17 @@
+[Unit]
+Description=Bondom Account (FastAPI + Telegram bot)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/bondom_account
+ExecStart=/home/ubuntu/bondom_account/.venv/bin/python /home/ubuntu/bondom_account/main.py
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:/var/log/bondom.log
+StandardError=append:/var/log/bondom.log
+
+[Install]
+WantedBy=multi-user.target

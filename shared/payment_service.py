@@ -159,19 +159,96 @@ def render_qr_png(qr_string: str) -> bytes:
 # --------------------------------------------------------------------------- #
 # 2. Verification (graceful on timeouts)
 # --------------------------------------------------------------------------- #
+BAKONG_API_HOST = "api-bakong.nbc.gov.kh"
+BAKONG_CHECK_PATH = "/v1/check_transaction_by_md5"
+
+
+def _raw_check_transaction(md5_hash: str) -> str:
+    """Check a transaction on Bakong and classify failures honestly.
+
+    The bakong-khqr library maps *every* nonzero responseCode — including
+    "token expired" (401 / errorCode 6) and "IP blocked" (403) — to
+    "UNPAID", which makes real misconfigurations look like the customer
+    simply hasn't paid. This raw call raises PaymentError for those cases
+    so they surface in logs and bot alerts instead.
+    """
+    import http.client
+    import json
+
+    if not settings.bakong_token:
+        raise PaymentError("BAKONG_TOKEN is not set")
+
+    conn = http.client.HTTPSConnection(
+        BAKONG_API_HOST, timeout=VERIFY_TIMEOUT_SECONDS
+    )
+    try:
+        conn.request(
+            "POST",
+            BAKONG_CHECK_PATH,
+            body=json.dumps({"md5": md5_hash}),
+            headers={
+                "Authorization": f"Bearer {settings.bakong_token}",
+                "Content-Type": "application/json",
+            },
+        )
+        response = conn.getresponse()
+        body = response.read().decode()
+    finally:
+        conn.close()
+
+    if response.status == 401:
+        raise PaymentError(
+            "Bakong rejected BAKONG_TOKEN (HTTP 401) — the token is invalid "
+            "or expired. Renew it at https://api-bakong.nbc.gov.kh/register "
+            "and update .env on this server."
+        )
+    if response.status == 403:
+        raise PaymentError(
+            "Bakong blocked this server's IP (HTTP 403) — the Bakong API "
+            "only accepts requests from Cambodia IP addresses."
+        )
+
+    try:
+        data = json.loads(body)
+    except json.JSONDecodeError:
+        logger.warning(
+            "Bakong returned non-JSON (HTTP %s) for md5=%s: %.200s",
+            response.status, md5_hash, body,
+        )
+        return "UNPAID"
+
+    logger.info(
+        "Bakong check md5=%s http=%s responseCode=%s errorCode=%s message=%s",
+        md5_hash, response.status,
+        data.get("responseCode"), data.get("errorCode"),
+        data.get("responseMessage"),
+    )
+
+    if data.get("responseCode") == 0:
+        return "PAID"
+    if data.get("errorCode") == 6:  # unauthorized token in a 200/4xx body
+        raise PaymentError(
+            f"Bakong token unauthorized: {data.get('responseMessage')}"
+        )
+    # errorCode 1 = "Transaction could not be found" — genuinely unpaid.
+    return "UNPAID"
+
+
 async def verify_payment(md5_hash: str) -> bool:
     """Return True if Bakong reports the transaction as PAID.
 
     Timeouts and transport errors are treated as "not paid yet" (logged,
     never raised) so a flaky network can't crash a poll loop or a bot
-    handler — the next attempt simply retries.
+    handler — the next attempt simply retries. Misconfiguration (bad
+    token, blocked IP) raises PaymentError instead of masquerading as
+    "unpaid".
     """
     if settings.payment_dev_mode:
         logger.info("PAYMENT_DEV_MODE: auto-approving payment md5=%s", md5_hash)
         return True
 
     def _check() -> str:
-        return _khqr().check_payment(md5_hash)  # -> "PAID" | "UNPAID"
+        return _raw_check_transaction(md5_hash)  # -> "PAID" | "UNPAID"
 
     try:
         status = await asyncio.wait_for(
