@@ -1,0 +1,89 @@
+databases:
+  - name: bondom-db
+    plan: starter
+
+services:
+  - type: web
+    name: bondom-api
+    runtime: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.api.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.4
+      - key: DATABASE_URL
+        fromDatabase:
+          name: bondom-db
+          property: connectionString
+      - key: PAYMENT_DEV_MODE
+        value: "false"
+      - key: BOT_TOKEN
+        sync: false
+      - key: BAKONG_TOKEN
+        sync: false
+      - key: BAKONG_ACCOUNT_ID
+        sync: false
+      - key: MERCHANT_NAME
+        value: Bondom Account
+      - key: MERCHANT_CITY
+        value: Phnom Penh
+      - key: ECHO_SQL
+        value: "false"
+
+  - type: worker
+    name: bondom-bot
+    runtime: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m app.bot.worker
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.4
+      - key: DATABASE_URL
+        fromDatabase:
+          name: bondom-db
+          property: connectionString
+      - key: PAYMENT_DEV_MODE
+        value: "false"
+      - key: BOT_TOKEN
+        sync: false
+      - key: BAKONG_TOKEN
+        sync: false
+      - key: BAKONG_ACCOUNT_ID
+        sync: false
+      - key: MERCHANT_NAME
+        value: Bondom Account
+      - key: MERCHANT_CITY
+        value: Phnom Penh
+      - key: ECHO_SQL
+        value: "false"
+
+  - type: web
+    name: bondom-admin
+    runtime: python
+    plan: starter
+    rootDir: app/web
+    buildCommand: pip install -r ../../requirements.txt -r requirements.txt
+    startCommand: python -m reflex run --env prod --single-port --frontend-port $PORT --backend-port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.4
+      - key: DATABASE_URL
+        fromDatabase:
+          name: bondom-db
+          property: connectionString
+      - key: PAYMENT_DEV_MODE
+        value: "false"
+      - key: BOT_TOKEN
+        sync: false
+      - key: BAKONG_TOKEN
+        sync: false
+      - key: BAKONG_ACCOUNT_ID
+        sync: false
+      - key: MERCHANT_NAME
+        value: Bondom Account
+      - key: MERCHANT_CITY
+        value: Phnom Penh
+      - key: ECHO_SQL
+        value: "false"

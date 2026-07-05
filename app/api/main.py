@@ -71,8 +71,9 @@ async def out_of_stock_handler(
 
 
 @app.exception_handler(services.UserInactiveError)
+@app.exception_handler(services.UserPermanentlyBlockedError)
 async def user_inactive_handler(
-    request: Request, exc: services.UserInactiveError
+    request: Request, exc: services.ServiceError
 ) -> JSONResponse:
     return JSONResponse(
         status_code=status.HTTP_403_FORBIDDEN, content={"detail": str(exc)}

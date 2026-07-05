@@ -18,7 +18,11 @@ from shared.config import PROJECT_ROOT, settings
 
 
 def _normalized_database_url(url: str) -> str:
-    """Resolve relative SQLite paths against project root for all processes."""
+    """Normalize DB URLs across local and cloud environments."""
+    if url.startswith("postgresql://"):
+        # Cloud providers often supply sync SQLAlchemy URLs by default.
+        return url.replace("postgresql://", "postgresql+asyncpg://", 1)
+
     prefix = "sqlite+aiosqlite:///./"
     if url.startswith(prefix):
         rel = url.removeprefix(prefix)

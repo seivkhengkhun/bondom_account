@@ -68,6 +68,14 @@ class UserInactiveError(ServiceError):
         super().__init__(f"User {user_id} is suspended and cannot purchase")
 
 
+class UserPermanentlyBlockedError(ServiceError):
+    def __init__(self, user_id: int) -> None:
+        self.user_id = user_id
+        super().__init__(
+            f"User {user_id} is permanently blocked and cannot use the service"
+        )
+
+
 class OrderNotFoundError(ServiceError):
     def __init__(self, order_id: int) -> None:
         self.order_id = order_id
@@ -82,6 +90,16 @@ class OutOfStockError(ServiceError):
         super().__init__(
             f"Product {product_id}: requested {requested} item(s), "
             f"only {available} in stock"
+        )
+
+
+class InsufficientBalanceError(ServiceError):
+    def __init__(self, user_id: int, required: Decimal, balance: Decimal) -> None:
+        self.user_id = user_id
+        self.required = required
+        self.balance = balance
+        super().__init__(
+            f"User {user_id} balance {balance:.2f} is less than required {required:.2f}"
         )
 
 
@@ -104,6 +122,78 @@ async def get_or_create_user(
     return user
 
 
+async def get_user_by_telegram_id(
+    session: AsyncSession, telegram_id: int
+) -> User | None:
+    """Return user by Telegram id, or None when unknown."""
+    async with transaction_scope(session):
+        return await session.scalar(select(User).where(User.telegram_id == telegram_id))
+
+
+USER_BLOCK_KEY_PREFIX = "user_blocked:"
+
+
+def _user_block_key(user_id: int) -> str:
+    return f"{USER_BLOCK_KEY_PREFIX}{user_id}"
+
+
+async def is_user_blocked(session: AsyncSession, user_id: int) -> bool:
+    """Return True if user has been permanently blocked by admin."""
+    async with transaction_scope(session):
+        row = await session.get(AppSetting, _user_block_key(user_id))
+        return row is not None
+
+
+async def list_blocked_user_ids(session: AsyncSession) -> set[int]:
+    """Return all permanently blocked user ids."""
+    async with transaction_scope(session):
+        rows = list(
+            (
+                await session.scalars(
+                    select(AppSetting.key).where(
+                        AppSetting.key.like(f"{USER_BLOCK_KEY_PREFIX}%")
+                    )
+                )
+            ).all()
+        )
+    blocked: set[int] = set()
+    for key in rows:
+        suffix = key.removeprefix(USER_BLOCK_KEY_PREFIX)
+        if suffix.isdigit():
+            blocked.add(int(suffix))
+    return blocked
+
+
+async def block_user_forever(session: AsyncSession, user_id: int) -> User:
+    """Permanently block a user and disable future access."""
+    async with transaction_scope(session):
+        user = await session.get(User, user_id)
+        if user is None:
+            raise UserNotFoundError(user_id)
+        user.is_active = False
+        key = _user_block_key(user_id)
+        row = await session.get(AppSetting, key)
+        if row is None:
+            session.add(AppSetting(key=key, value="true"))
+    return user
+
+
+async def unblock_user(session: AsyncSession, user_id: int) -> User:
+    """Remove permanent block marker and reactivate user access."""
+    async with transaction_scope(session):
+        user = await session.get(User, user_id)
+        if user is None:
+            raise UserNotFoundError(user_id)
+
+        key = _user_block_key(user_id)
+        row = await session.get(AppSetting, key)
+        if row is not None:
+            await session.delete(row)
+
+        user.is_active = True
+    return user
+
+
 async def toggle_user_status(
     session: AsyncSession, user_id: int, is_active: bool
 ) -> User:
@@ -117,6 +207,8 @@ async def toggle_user_status(
         user = await session.get(User, user_id)
         if user is None:
             raise UserNotFoundError(user_id)
+        if is_active and await is_user_blocked(session, user_id):
+            raise UserPermanentlyBlockedError(user_id)
         user.is_active = is_active
     return user
 
@@ -135,10 +227,15 @@ async def list_users(session: AsyncSession, limit: int = 200) -> list[User]:
 async def list_active_telegram_ids(session: AsyncSession) -> list[int]:
     """Return Telegram IDs for active users who can receive announcements."""
     async with transaction_scope(session):
-        result = await session.scalars(
-            select(User.telegram_id).where(User.is_active.is_(True))
+        blocked = await list_blocked_user_ids(session)
+        users = list(
+            (
+                await session.scalars(
+                    select(User).where(User.is_active.is_(True))
+                )
+            ).all()
         )
-        return [int(x) for x in result.all()]
+        return [int(u.telegram_id) for u in users if u.id not in blocked]
 
 
 # --------------------------------------------------------------------------- #
@@ -300,6 +397,82 @@ async def delete_product(session: AsyncSession, product_id: int) -> None:
 
 BOT_SHOW_STOCK_KEY = "bot_show_stock"
 PRODUCT_NOTE_KEY_PREFIX = "product_note:"
+USER_BALANCE_KEY_PREFIX = "user_balance:"
+
+
+def _user_balance_key(user_id: int) -> str:
+    return f"{USER_BALANCE_KEY_PREFIX}{user_id}"
+
+
+def _to_money(value: Decimal) -> Decimal:
+    return value.quantize(Decimal("0.01"))
+
+
+async def get_user_balance(session: AsyncSession, user_id: int) -> Decimal:
+    """Get wallet balance for a user (USD)."""
+    async with transaction_scope(session):
+        row = await session.get(AppSetting, _user_balance_key(user_id))
+        if row is None:
+            return Decimal("0.00")
+        try:
+            return _to_money(Decimal(row.value))
+        except Exception:
+            return Decimal("0.00")
+
+
+async def add_user_balance(
+    session: AsyncSession, user_id: int, amount: Decimal
+) -> Decimal:
+    """Increase user wallet balance and return updated amount."""
+    if amount <= 0:
+        raise ServiceError("Top-up amount must be greater than 0")
+    async with transaction_scope(session):
+        key = _user_balance_key(user_id)
+        row = await session.get(AppSetting, key)
+        current = Decimal("0.00") if row is None else Decimal(row.value)
+        updated = _to_money(current + amount)
+        if row is None:
+            session.add(AppSetting(key=key, value=str(updated)))
+        else:
+            row.value = str(updated)
+        return updated
+
+
+async def spend_user_balance(
+    session: AsyncSession, user_id: int, amount: Decimal
+) -> Decimal:
+    """Decrease wallet balance when sufficient and return updated amount."""
+    if amount <= 0:
+        raise ServiceError("Debit amount must be greater than 0")
+    async with transaction_scope(session):
+        key = _user_balance_key(user_id)
+        row = await session.get(AppSetting, key)
+        current = Decimal("0.00") if row is None else Decimal(row.value)
+        if current < amount:
+            raise InsufficientBalanceError(user_id, amount, _to_money(current))
+        updated = _to_money(current - amount)
+        if row is None:
+            session.add(AppSetting(key=key, value=str(updated)))
+        else:
+            row.value = str(updated)
+        return updated
+
+
+async def adjust_user_balance(
+    session: AsyncSession, user_id: int, delta: Decimal
+) -> Decimal:
+    """Adjust wallet by signed delta (admin tool); returns updated balance."""
+    if delta == 0:
+        raise ServiceError("Adjustment amount cannot be zero")
+
+    async with transaction_scope(session):
+        user = await session.get(User, user_id)
+        if user is None:
+            raise UserNotFoundError(user_id)
+
+    if delta > 0:
+        return await add_user_balance(session, user_id, delta)
+    return await spend_user_balance(session, user_id, abs(delta))
 
 
 async def get_bot_show_stock(session: AsyncSession) -> bool:
@@ -469,6 +642,8 @@ async def create_order_and_allocate_stock(
         user = await session.get(User, payload.user_id)
         if user is None:
             raise UserNotFoundError(payload.user_id)
+        if await is_user_blocked(session, payload.user_id):
+            raise UserPermanentlyBlockedError(payload.user_id)
         if not user.is_active:
             raise UserInactiveError(payload.user_id)
 
@@ -509,6 +684,36 @@ async def create_order_and_allocate_stock(
             item.status = InventoryStatus.SOLD
             item.assigned_order_id = order.id
 
+    return order
+
+
+async def buy_one_with_wallet(
+    session: AsyncSession, user_id: int, product_id: int
+) -> Order:
+    """One-tap purchase: charge wallet, allocate one stock item, deliverable order.
+
+    This flow is intended for prepaid customers after top-up.
+    """
+    async with transaction_scope(session):
+        user = await session.get(User, user_id)
+        if user is None:
+            raise UserNotFoundError(user_id)
+        if await is_user_blocked(session, user_id):
+            raise UserPermanentlyBlockedError(user_id)
+        if not user.is_active:
+            raise UserInactiveError(user_id)
+
+        product = await session.get(Product, product_id)
+        if product is None or not product.is_active:
+            raise ProductNotFoundError(product_id)
+
+        await spend_user_balance(session, user_id, product.price)
+
+        order = await create_order_and_allocate_stock(
+            session,
+            OrderCreate(user_id=user_id, product_id=product_id, quantity=1),
+        )
+        order.status = OrderStatus.DELIVERED
     return order
 
 

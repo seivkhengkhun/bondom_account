@@ -65,6 +65,8 @@ class UserRow:
     telegram_id: str
     username: str
     is_active: bool
+    is_blocked: bool
+    balance: str
 
 
 class AdminState(rx.State):
@@ -86,6 +88,8 @@ class AdminState(rx.State):
     orders_message: str = ""
     announcement_text: str = ""
     announcement_message: str = ""
+    users_message: str = ""
+    user_adjust_amount: str = ""
 
     # Add-product form
     new_name: str = ""
@@ -111,6 +115,7 @@ class AdminState(rx.State):
             overviews = await services.list_product_overviews(session)
             orders = await services.list_orders(session, limit=100)
             users = await services.list_users(session, limit=200)
+            blocked_user_ids = await services.list_blocked_user_ids(session)
             self.bot_show_stock = await services.get_bot_show_stock(session)
 
         self.stat_users = stats.total_users
@@ -188,9 +193,14 @@ class AdminState(rx.State):
                 telegram_id=str(u.telegram_id),
                 username=u.username or "—",
                 is_active=u.is_active,
+                is_blocked=u.id in blocked_user_ids,
+                balance="0.00",
             )
             for u in users
         ]
+        async with AsyncSessionLocal() as session:
+            for row in self.users:
+                row.balance = f"{(await services.get_user_balance(session, row.id)):.2f}"
 
     # ----------------------------------------------------------------- #
     # Add product
@@ -252,8 +262,75 @@ class AdminState(rx.State):
     # User control: suspend / reactivate (bot checks on next purchase)
     # ----------------------------------------------------------------- #
     async def toggle_user(self, user_id: int, is_active: bool) -> None:
+        try:
+            async with AsyncSessionLocal() as session:
+                await services.toggle_user_status(session, user_id, is_active)
+            self.users_message = (
+                f"✅ User #{user_id} {'reactivated' if is_active else 'suspended'}."
+            )
+        except services.UserPermanentlyBlockedError:
+            self.users_message = (
+                f"🚫 User #{user_id} is permanently blocked and cannot be reactivated."
+            )
+        await self.load_all()
+
+    async def block_user_forever(self, user_id: int) -> None:
         async with AsyncSessionLocal() as session:
-            await services.toggle_user_status(session, user_id, is_active)
+            await services.block_user_forever(session, user_id)
+        self.users_message = f"🔒 User #{user_id} permanently blocked."
+        await self.load_all()
+
+    async def unblock_user(self, user_id: int) -> None:
+        async with AsyncSessionLocal() as session:
+            await services.unblock_user(session, user_id)
+        self.users_message = f"✅ User #{user_id} unblocked and reactivated."
+        await self.load_all()
+
+    def set_user_adjust_amount(self, value: str) -> None:
+        self.user_adjust_amount = value
+
+    async def credit_user_wallet(self, user_id: int) -> None:
+        try:
+            amount = Decimal(self.user_adjust_amount or "0")
+        except InvalidOperation:
+            self.users_message = "⚠ Invalid wallet amount."
+            return
+        if amount <= 0:
+            self.users_message = "⚠ Enter amount greater than 0."
+            return
+
+        async with AsyncSessionLocal() as session:
+            updated = await services.adjust_user_balance(session, user_id, amount)
+        self.users_message = (
+            f"✅ Credited ${amount:.2f} to user #{user_id}. "
+            f"Balance: ${updated:.2f}."
+        )
+        await self.load_all()
+
+    async def debit_user_wallet(self, user_id: int) -> None:
+        try:
+            amount = Decimal(self.user_adjust_amount or "0")
+        except InvalidOperation:
+            self.users_message = "⚠ Invalid wallet amount."
+            return
+        if amount <= 0:
+            self.users_message = "⚠ Enter amount greater than 0."
+            return
+
+        try:
+            async with AsyncSessionLocal() as session:
+                updated = await services.adjust_user_balance(
+                    session, user_id, Decimal("0") - amount
+                )
+            self.users_message = (
+                f"✅ Debited ${amount:.2f} from user #{user_id}. "
+                f"Balance: ${updated:.2f}."
+            )
+        except services.InsufficientBalanceError as exc:
+            self.users_message = (
+                f"⚠ Cannot debit user #{user_id}. "
+                f"Need ${exc.required:.2f}, have ${exc.balance:.2f}."
+            )
         await self.load_all()
 
     # ----------------------------------------------------------------- #
@@ -687,10 +764,53 @@ def _user_row(u: UserRow) -> rx.Component:
         rx.table.cell(u.id),
         rx.table.cell(u.telegram_id),
         rx.table.cell(u.username),
+        rx.table.cell("$" + u.balance),
+        rx.table.cell(
+            rx.badge(
+                rx.cond(u.is_blocked, "Blocked", "Allowed"),
+                color_scheme=rx.cond(u.is_blocked, "red", "green"),
+            )
+        ),
         rx.table.cell(
             rx.switch(
                 checked=u.is_active,
                 on_change=lambda checked: AdminState.toggle_user(u.id, checked),
+            )
+        ),
+        rx.table.cell(
+            rx.cond(
+                u.is_blocked,
+                rx.button(
+                    "Unblock",
+                    size="1",
+                    color_scheme="green",
+                    variant="solid",
+                    on_click=lambda: AdminState.unblock_user(u.id),
+                ),
+                rx.button(
+                    "Block Forever",
+                    size="1",
+                    color_scheme="red",
+                    variant="solid",
+                    on_click=lambda: AdminState.block_user_forever(u.id),
+                ),
+            )
+        ),
+        rx.table.cell(
+            rx.hstack(
+                rx.button(
+                    "+",
+                    size="1",
+                    color_scheme="green",
+                    on_click=lambda: AdminState.credit_user_wallet(u.id),
+                ),
+                rx.button(
+                    "-",
+                    size="1",
+                    color_scheme="orange",
+                    on_click=lambda: AdminState.debit_user_wallet(u.id),
+                ),
+                spacing="2",
             )
         ),
     )
@@ -699,13 +819,29 @@ def _user_row(u: UserRow) -> rx.Component:
 def users_table() -> rx.Component:
     return rx.vstack(
         rx.heading("Users", size="5"),
+        rx.hstack(
+            rx.text("Wallet adjust amount (USD):"),
+            rx.input(
+                placeholder="e.g. 5.00",
+                value=AdminState.user_adjust_amount,
+                on_change=AdminState.set_user_adjust_amount,
+                width="10em",
+            ),
+            spacing="2",
+            align="center",
+        ),
+        rx.text(AdminState.users_message),
         rx.table.root(
             rx.table.header(
                 rx.table.row(
                     rx.table.column_header_cell("ID"),
                     rx.table.column_header_cell("Telegram ID"),
                     rx.table.column_header_cell("Username"),
+                    rx.table.column_header_cell("Wallet"),
+                    rx.table.column_header_cell("Security Status"),
                     rx.table.column_header_cell("Active (toggle to suspend)"),
+                    rx.table.column_header_cell("Permanent Block"),
+                    rx.table.column_header_cell("Wallet +/-"),
                 )
             ),
             rx.table.body(rx.foreach(AdminState.users, _user_row)),

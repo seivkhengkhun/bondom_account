@@ -78,3 +78,27 @@ works without a Bakong merchant account.
 - Stock is reserved at order time; add a scheduled job that releases
   inventory from orders whose payments expired if you want strict
   anti-hoarding.
+
+## Render deployment (managed app + managed database)
+
+This repository includes a Render blueprint file: `render.yaml`.
+
+It provisions:
+- one managed PostgreSQL database (`bondom-db`)
+- one API web service (`bondom-api`)
+- one bot worker service (`bondom-bot`)
+- one admin web service (`bondom-admin`)
+
+Steps:
+1. Push this repo to GitHub.
+2. In Render, choose **Blueprint** deployment and select this repository.
+3. Fill secret env vars when prompted:
+   - `BOT_TOKEN`
+   - `BAKONG_TOKEN`
+   - `BAKONG_ACCOUNT_ID`
+4. Deploy.
+
+Notes:
+- `shared/database.py` auto-converts `postgresql://...` to
+  `postgresql+asyncpg://...` for cloud providers that expose sync URLs.
+- Admin service runs Reflex in production single-port mode.

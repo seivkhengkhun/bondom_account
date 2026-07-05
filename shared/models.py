@@ -41,6 +41,13 @@ class PaymentStatus(str, enum.Enum):
     FAILED = "failed"
 
 
+class TopupStatus(str, enum.Enum):
+    PENDING = "pending"
+    PAID = "paid"
+    EXPIRED = "expired"
+    FAILED = "failed"
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -55,6 +62,7 @@ class User(Base):
     )
 
     orders: Mapped[list["Order"]] = relationship(back_populates="user")
+    topups: Mapped[list["WalletTopup"]] = relationship(back_populates="user")
 
 
 class Product(Base):
@@ -185,3 +193,33 @@ class AppSetting(Base):
 
     key: Mapped[str] = mapped_column(String(100), primary_key=True)
     value: Mapped[str] = mapped_column(Text)
+
+
+class WalletTopup(Base):
+    """Wallet top-up KHQR session for a specific user."""
+
+    __tablename__ = "wallet_topups"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    md5: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    qr_string: Mapped[str] = mapped_column(Text)
+    amount: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+    currency: Mapped[str] = mapped_column(String(3), default="USD")
+    status: Mapped[TopupStatus] = mapped_column(
+        Enum(
+            TopupStatus,
+            name="topup_status",
+            values_callable=lambda e: [m.value for m in e],
+        ),
+        default=TopupStatus.PENDING,
+        index=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+    user: Mapped["User"] = relationship(back_populates="topups")

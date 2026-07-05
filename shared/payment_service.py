@@ -25,6 +25,7 @@ import asyncio
 import hashlib
 import io
 import logging
+import ssl
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -33,10 +34,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from shared.config import settings
 from shared.database import AsyncSessionLocal
-from shared.models import Order, OrderStatus, Payment, PaymentStatus
+from shared.models import (
+    Order,
+    OrderStatus,
+    Payment,
+    PaymentStatus,
+    TopupStatus,
+    User,
+    WalletTopup,
+)
 from shared.services import (
     OrderNotFoundError,
+    UserPermanentlyBlockedError,
+    add_user_balance,
     cancel_order_and_release_inventory,
+    is_user_blocked,
     transaction_scope,
 )
 
@@ -45,6 +57,26 @@ logger = logging.getLogger(__name__)
 QR_LIFETIME = timedelta(seconds=900)  # 15 minutes
 VERIFY_TIMEOUT_SECONDS = 15
 POLL_INTERVAL_SECONDS = 10
+
+
+def _configure_tls_ca_bundle() -> None:
+    """Force stdlib HTTPS clients to trust certifi CA bundle.
+
+    Some macOS Python installations fail TLS verification for external APIs
+    unless an explicit CA bundle is configured.
+    """
+    try:
+        import certifi
+    except ImportError:
+        return
+
+    cafile = certifi.where()
+    ssl._create_default_https_context = (  # type: ignore[attr-defined]
+        lambda: ssl.create_default_context(cafile=cafile)
+    )
+
+
+_configure_tls_ca_bundle()
 
 
 class PaymentError(Exception):
@@ -265,6 +297,105 @@ async def poll_payment_until_paid(
             async with AsyncSessionLocal() as session:
                 await confirm_payment(session, payment_id)
             logger.info("poll: payment %s confirmed", payment_id)
+            return True
+
+        await asyncio.sleep(interval)
+
+
+# --------------------------------------------------------------------------- #
+# 5. Wallet top-up flow
+# --------------------------------------------------------------------------- #
+async def create_wallet_topup_session(
+    session: AsyncSession, user_id: int, amount: Decimal
+) -> WalletTopup:
+    """Create KHQR payment session to top up user wallet balance."""
+    if amount <= 0:
+        raise PaymentError("Top-up amount must be greater than 0")
+
+    async with transaction_scope(session):
+        user = await session.get(User, user_id)
+        if user is None:
+            raise PaymentError(f"User {user_id} not found")
+        if await is_user_blocked(session, user_id):
+            raise UserPermanentlyBlockedError(user_id)
+
+    qr_string, md5_hash = await generate_payment_qr(
+        f"TOPUP-{user_id}", float(amount), "USD"
+    )
+
+    topup = WalletTopup(
+        user_id=user_id,
+        md5=md5_hash,
+        qr_string=qr_string,
+        amount=amount,
+        currency="USD",
+        status=TopupStatus.PENDING,
+        expires_at=datetime.now(timezone.utc) + QR_LIFETIME,
+    )
+    async with transaction_scope(session):
+        session.add(topup)
+    return topup
+
+
+async def get_wallet_topup(
+    session: AsyncSession, topup_id: int
+) -> WalletTopup | None:
+    async with transaction_scope(session):
+        return await session.get(WalletTopup, topup_id)
+
+
+def is_wallet_topup_expired(topup: WalletTopup) -> bool:
+    expires_at = topup.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) >= expires_at
+
+
+async def confirm_wallet_topup(
+    session: AsyncSession, topup_id: int
+) -> WalletTopup:
+    """Mark top-up as paid and credit user wallet atomically."""
+    async with transaction_scope(session):
+        topup = await session.get(WalletTopup, topup_id)
+        if topup is None:
+            raise PaymentError(f"Wallet top-up {topup_id} not found")
+        if topup.status is TopupStatus.PAID:
+            return topup
+        if topup.status is not TopupStatus.PENDING:
+            raise PaymentError(
+                f"Wallet top-up {topup_id} is {topup.status.value}"
+            )
+        topup.status = TopupStatus.PAID
+        await add_user_balance(session, topup.user_id, topup.amount)
+    return topup
+
+
+async def poll_wallet_topup_until_paid(
+    topup_id: int, interval: int = POLL_INTERVAL_SECONDS
+) -> bool:
+    """Poll Bakong until wallet top-up is PAID or expires."""
+    while True:
+        async with AsyncSessionLocal() as session:
+            topup = await session.get(WalletTopup, topup_id)
+        if topup is None:
+            logger.error("poll: wallet top-up %s vanished", topup_id)
+            return False
+        if topup.status is TopupStatus.PAID:
+            return True
+
+        if is_wallet_topup_expired(topup):
+            async with AsyncSessionLocal() as session:
+                async with transaction_scope(session):
+                    stale = await session.get(WalletTopup, topup_id)
+                    if stale is not None and stale.status is TopupStatus.PENDING:
+                        stale.status = TopupStatus.EXPIRED
+            logger.info("poll: wallet top-up %s expired unpaid", topup_id)
+            return False
+
+        if await verify_payment(topup.md5):
+            async with AsyncSessionLocal() as session:
+                await confirm_wallet_topup(session, topup_id)
+            logger.info("poll: wallet top-up %s confirmed", topup_id)
             return True
 
         await asyncio.sleep(interval)
