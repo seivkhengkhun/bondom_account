@@ -48,6 +48,13 @@ class TopupStatus(str, enum.Enum):
     FAILED = "failed"
 
 
+class SmsOrderStatus(str, enum.Enum):
+    WAITING = "waiting_sms"
+    COMPLETED = "completed"
+    REFUNDED = "refunded"
+    FAILED = "failed"
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -223,3 +230,44 @@ class WalletTopup(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
     user: Mapped["User"] = relationship(back_populates="topups")
+
+
+class SmsOrder(Base):
+    """A rented SMS-activation phone number (website-only feature).
+
+    ``price`` is what the customer paid (provider cost + markup);
+    ``cost`` is what the provider charged our reseller balance. Refunds
+    credit the customer's wallet with ``price``.
+    """
+
+    __tablename__ = "sms_orders"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    category: Mapped[str] = mapped_column(String(32))
+    country: Mapped[str] = mapped_column(String(64))
+    country_code: Mapped[str] = mapped_column(String(8))
+    phone: Mapped[str] = mapped_column(String(32), default="")
+    provider_order_id: Mapped[str] = mapped_column(
+        String(64), default="", index=True
+    )
+    cost: Mapped[Decimal] = mapped_column(Numeric(10, 3))
+    price: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+    status: Mapped[SmsOrderStatus] = mapped_column(
+        Enum(
+            SmsOrderStatus,
+            name="sms_order_status",
+            values_callable=lambda e: [m.value for m in e],
+        ),
+        default=SmsOrderStatus.WAITING,
+        index=True,
+    )
+    otp_code: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    last_checked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )

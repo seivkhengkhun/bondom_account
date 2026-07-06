@@ -73,6 +73,7 @@ async def _render(request: Request, template: str, **context) -> HTMLResponse:
     context.setdefault("session_user", _current_session(request))
     context.setdefault("bot_username", await _get_bot_username())
     context.setdefault("auth_url", _auth_url(request))
+    context.setdefault("sms_enabled", settings.sms_enabled)
     return templates.TemplateResponse(
         request=request, name=template, context=context
     )
@@ -318,6 +319,229 @@ async def my_orders(request: Request):
     return await _render(
         request,
         "orders.html",
+        orders=orders,
+        balance=f"{balance:.2f}",
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Wallet top-up (KHQR) — needed to fund SMS activations on the web
+# --------------------------------------------------------------------------- #
+from decimal import Decimal, InvalidOperation
+from urllib.parse import quote
+
+from shared.models import TopupStatus
+from shared import sms_service
+
+
+async def _session_user(request: Request):
+    sess = _current_session(request)
+    if sess is None:
+        return None
+    async with AsyncSessionLocal() as session:
+        return await services.get_or_create_user(
+            session, sess["tid"], sess.get("u") or ""
+        )
+
+
+@router.get("/wallet", response_class=HTMLResponse)
+async def wallet_page(request: Request):
+    user = await _session_user(request)
+    if user is None:
+        return RedirectResponse("/")
+    async with AsyncSessionLocal() as session:
+        balance = await services.get_user_balance(session, user.id)
+    return await _render(
+        request,
+        "wallet.html",
+        balance=f"{balance:.2f}",
+        error=request.query_params.get("error", ""),
+        success=request.query_params.get("success", ""),
+    )
+
+
+@router.post("/web/wallet/topup")
+async def wallet_topup(request: Request, amount: str = Form(...)):
+    user = await _session_user(request)
+    if user is None:
+        return RedirectResponse("/", status_code=303)
+    try:
+        value = Decimal(amount.strip().replace(",", "")).quantize(
+            Decimal("0.01")
+        )
+    except (InvalidOperation, ValueError):
+        return RedirectResponse(
+            "/wallet?error=Enter+a+valid+amount", status_code=303
+        )
+    if value < Decimal("0.10") or value > Decimal("500"):
+        return RedirectResponse(
+            "/wallet?error=Amount+must+be+between+%240.10+and+%24500",
+            status_code=303,
+        )
+
+    async with AsyncSessionLocal() as session:
+        topup = await payment_service.create_wallet_topup_session(
+            session, user.id, value
+        )
+    task = asyncio.create_task(
+        payment_service.poll_wallet_topup_until_paid(topup.id)
+    )
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return RedirectResponse(f"/wallet/pay/{topup.id}", status_code=303)
+
+
+@router.get("/wallet/pay/{topup_id}", response_class=HTMLResponse)
+async def wallet_pay_page(request: Request, topup_id: int):
+    user = await _session_user(request)
+    if user is None:
+        return RedirectResponse("/")
+    async with AsyncSessionLocal() as session:
+        topup = await payment_service.get_wallet_topup(session, topup_id)
+    if topup is None or topup.user_id != user.id:
+        return RedirectResponse("/wallet")
+    if topup.status is TopupStatus.PAID:
+        return RedirectResponse("/wallet?success=Top-up+received")
+
+    qr_b64 = base64.b64encode(
+        payment_service.render_qr_png(topup.qr_string)
+    ).decode()
+    return await _render(
+        request,
+        "wallet_pay.html",
+        topup=topup,
+        amount=f"{topup.amount:.2f}",
+        qr_b64=qr_b64,
+        expires_at=topup.expires_at.isoformat() + "Z",
+    )
+
+
+@router.get("/web/wallet/status/{topup_id}")
+async def wallet_topup_status(request: Request, topup_id: int) -> JSONResponse:
+    user = await _session_user(request)
+    if user is None:
+        return JSONResponse({"status": "unknown"}, status_code=404)
+    async with AsyncSessionLocal() as session:
+        topup = await payment_service.get_wallet_topup(session, topup_id)
+    if topup is None or topup.user_id != user.id:
+        return JSONResponse({"status": "unknown"}, status_code=404)
+    return JSONResponse({"status": topup.status.value})
+
+
+# --------------------------------------------------------------------------- #
+# SMS activation (website-only — intentionally absent from the bot)
+# --------------------------------------------------------------------------- #
+@router.get("/sms", response_class=HTMLResponse)
+async def sms_page(request: Request):
+    if not settings.sms_enabled:
+        return RedirectResponse("/")
+    user = await _session_user(request)
+    balance = Decimal("0")
+    if user is not None:
+        async with AsyncSessionLocal() as session:
+            balance = await services.get_user_balance(session, user.id)
+
+    stock: dict[str, list] = {}
+    stock_error = ""
+    for category in sms_service.CATEGORIES:
+        try:
+            stock[category] = await sms_service.get_stock(category)
+        except sms_service.SmsServiceError as exc:
+            stock[category] = []
+            stock_error = str(exc)
+
+    return await _render(
+        request,
+        "sms.html",
+        stock=stock,
+        balance=balance,
+        balance_str=f"{balance:.2f}",
+        stock_error=stock_error,
+        error=request.query_params.get("error", ""),
+    )
+
+
+@router.post("/web/sms/buy")
+async def sms_buy(
+    request: Request,
+    category: str = Form(...),
+    country: str = Form(...),
+):
+    if not settings.sms_enabled:
+        return RedirectResponse("/", status_code=303)
+    user = await _session_user(request)
+    if user is None:
+        return RedirectResponse("/sms", status_code=303)
+
+    try:
+        async with AsyncSessionLocal() as session:
+            order = await sms_service.create_sms_order(
+                session, user.id, category, country
+            )
+    except sms_service.InsufficientBalanceError as exc:
+        return RedirectResponse(
+            "/wallet?error=" + quote(
+                f"Not enough balance: need ${exc.required:.2f}, "
+                f"you have ${exc.balance:.2f}. Top up below."
+            ),
+            status_code=303,
+        )
+    except sms_service.SmsServiceError as exc:
+        return RedirectResponse(
+            "/sms?error=" + quote(str(exc)), status_code=303
+        )
+
+    sms_service.spawn_sms_watcher(order.id)
+    return RedirectResponse(f"/sms/{order.id}", status_code=303)
+
+
+async def _owned_sms_order(request: Request, sms_id: int):
+    user = await _session_user(request)
+    if user is None:
+        return None
+    async with AsyncSessionLocal() as session:
+        order = await session.get(sms_service.SmsOrder, sms_id)
+    if order is None or order.user_id != user.id:
+        return None
+    return order
+
+
+@router.get("/sms/{sms_id}", response_class=HTMLResponse)
+async def sms_order_page(request: Request, sms_id: int):
+    order = await _owned_sms_order(request, sms_id)
+    if order is None:
+        return RedirectResponse("/sms")
+    return await _render(request, "sms_order.html", o=order)
+
+
+@router.get("/web/sms/{sms_id}/status")
+async def sms_order_status(request: Request, sms_id: int) -> JSONResponse:
+    order = await _owned_sms_order(request, sms_id)
+    if order is None:
+        return JSONResponse({"status": "unknown"}, status_code=404)
+    try:
+        async with AsyncSessionLocal() as session:
+            order = await sms_service.refresh_sms_order(session, order.id)
+    except sms_service.SmsServiceError:
+        pass
+    return JSONResponse(
+        {"status": order.status.value, "otp": order.otp_code or None}
+    )
+
+
+@router.get("/my/sms", response_class=HTMLResponse)
+async def my_sms_orders(request: Request):
+    if not settings.sms_enabled:
+        return RedirectResponse("/")
+    user = await _session_user(request)
+    if user is None:
+        return RedirectResponse("/sms")
+    async with AsyncSessionLocal() as session:
+        orders = await sms_service.list_user_sms_orders(session, user.id)
+        balance = await services.get_user_balance(session, user.id)
+    return await _render(
+        request,
+        "sms_orders.html",
         orders=orders,
         balance=f"{balance:.2f}",
     )

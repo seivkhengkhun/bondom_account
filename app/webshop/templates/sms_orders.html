@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}My SMS Numbers — Bondom Account{% endblock %}
+{% block content %}
+  <div class="page-head">
+    <h1>📱 My SMS Numbers</h1>
+    <div class="head-actions">
+      <span class="wallet-chip">💰 ${{ balance }}</span>
+      <a class="btn btn-primary btn-sm" href="/sms">+ New number</a>
+    </div>
+  </div>
+
+  {% if orders %}
+    <div class="orders-list">
+      {% for o in orders %}
+        <a class="card order-row" href="/sms/{{ o.id }}">
+          <div class="or-main">
+            <span class="or-id">{{ o.phone or "—" }}</span>
+            <span class="or-date muted">
+              {% if o.category == "facebook" %}Facebook{% else %}Instagram{% endif %}
+              · {{ o.country }} · {{ o.created_at.strftime("%Y-%m-%d %H:%M") }}
+            </span>
+          </div>
+          <span class="or-total">${{ "%.2f" | format(o.price) }}</span>
+          <span class="badge {% if o.status.value == 'completed' %}ok{% elif o.status.value == 'waiting_sms' %}warn{% else %}out{% endif %}">
+            {% if o.status.value == "waiting_sms" %}waiting{% else %}{{ o.status.value }}{% endif %}
+          </span>
+          <span class="or-action">
+            {% if o.status.value == "completed" %}{{ o.otp_code }}{% else %}View →{% endif %}
+          </span>
+        </a>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="card center-card">
+      <p class="empty-emoji" aria-hidden="true">📱</p>
+      <h2>No numbers yet</h2>
+      <p class="muted">Rent a number for Facebook or Instagram verification.</p>
+      <a class="btn btn-primary" href="/sms">Browse numbers</a>
+    </div>
+  {% endif %}
+{% endblock %}

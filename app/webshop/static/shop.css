@@ -480,3 +480,27 @@ a:hover { color: #818cf8; }
   * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
   html { scroll-behavior: auto; }
 }
+
+/* ------------------------------------------------------------ SMS numbers */
+.head-actions { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+.sms-grid { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+.sms-offer { display: flex; flex-direction: column; gap: 0.8rem; }
+.sms-country { display: flex; align-items: center; gap: 0.7rem; }
+.sms-country h3 { font-size: 1rem; }
+.sms-flag { font-size: 1.7rem; line-height: 1; }
+.how-list { margin-left: 1.2rem; color: var(--muted); font-size: 0.93rem; display: grid; gap: 0.3rem; }
+
+.phone-row { display: flex; align-items: center; justify-content: center; gap: 0.6rem; flex-wrap: wrap; margin-top: 0.3rem; }
+.phone-big { font-size: 1.7rem; font-weight: 800; letter-spacing: 0.02em; }
+.otp-code {
+  font-size: 2.4rem;
+  font-weight: 800;
+  letter-spacing: 0.25em;
+  color: var(--green);
+  background: var(--green-soft);
+  border: 1px solid rgba(52, 211, 153, 0.3);
+  border-radius: var(--radius);
+  padding: 0.6rem 1rem;
+  margin: 0.6rem auto 0.9rem;
+  width: fit-content;
+}

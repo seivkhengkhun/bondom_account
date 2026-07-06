@@ -4,6 +4,7 @@ Single settings object shared by the API, the Telegram bot and the
 Reflex admin panel.
 """
 
+from decimal import Decimal
 from functools import lru_cache
 from pathlib import Path
 
@@ -43,6 +44,12 @@ class Settings(BaseSettings):
 
     # Reflex admin panel — empty password means nobody can log in.
     admin_password: str = ""
+
+    # SMS activation reseller API (Angkor Phone SMS) — website-only feature.
+    sms_enabled: bool = False
+    sms_api_key: str = ""
+    sms_api_base: str = "https://angkorphonesms.shop"
+    sms_markup_usd: Decimal = Decimal("0.03")
 
     model_config = SettingsConfigDict(
         # Use an absolute path so API/bot/admin load the same .env regardless of cwd.

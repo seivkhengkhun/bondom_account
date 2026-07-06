@@ -28,7 +28,11 @@
       </a>
       <nav aria-label="Main">
         <a href="/" class="nav-link">Catalog</a>
+        {% if sms_enabled %}
+          <a href="/sms" class="nav-link">📱 SMS Numbers</a>
+        {% endif %}
         {% if session_user %}
+          <a href="/wallet" class="nav-link">💰 Wallet</a>
           <a href="/my/orders" class="nav-link"><svg class="ic" aria-hidden="true"><use href="#i-package"/></svg> My Orders</a>
           <div class="user-menu">
             <span class="user-chip" title="Signed in via Telegram">

@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}SMS #{{ o.id }} — Bondom Account{% endblock %}
+{% block content %}
+  <nav class="breadcrumb" aria-label="Breadcrumb">
+    <a href="/sms">SMS Numbers</a> <span aria-hidden="true">›</span>
+    <a href="/my/sms">My numbers</a> <span aria-hidden="true">›</span>
+    <span class="current">#{{ o.id }}</span>
+  </nav>
+
+  <div class="pay-layout">
+    <div class="card pay-card">
+      <p class="pay-order muted">
+        {% if o.category == "facebook" %}📘 Facebook{% else %}📸 Instagram{% endif %}
+        · {{ o.country }} · ${{ "%.2f" | format(o.price) }}
+      </p>
+
+      <p class="muted" style="font-size:.85rem;margin-top:.8rem">Your rented number</p>
+      <div class="phone-row">
+        <span class="phone-big" id="phone">{{ o.phone }}</span>
+        <button class="btn btn-ghost btn-sm copy-btn" data-value="{{ o.phone }}" aria-label="Copy phone number">
+          <svg class="ic sm" aria-hidden="true"><use href="#i-copy"/></svg> Copy
+        </button>
+      </div>
+      <p class="hint">Enter this number on
+        {{ "Facebook" if o.category == "facebook" else "Instagram" }} and request the SMS code.</p>
+
+      <div id="otp-area">
+        {% if o.status.value == "completed" %}
+          <p class="muted" style="margin-top:1rem">Your SMS code</p>
+          <div class="otp-code">{{ o.otp_code }}</div>
+          <button class="btn btn-primary copy-btn" data-value="{{ o.otp_code }}">
+            <svg class="ic sm" aria-hidden="true"><use href="#i-copy"/></svg> Copy code
+          </button>
+        {% elif o.status.value == "waiting_sms" %}
+          <div class="status waiting" id="status" role="status" aria-live="polite">
+            <span class="spinner" aria-hidden="true"></span>
+            Waiting for the SMS code…
+          </div>
+          <p class="hint">Keep this page open — the code appears automatically.
+            If no SMS arrives, your ${{ "%.2f" | format(o.price) }} is refunded.</p>
+        {% elif o.status.value == "refunded" %}
+          <div class="status expired">No SMS received — ${{ "%.2f" | format(o.price) }}
+            was refunded to your wallet.</div>
+          <a class="btn btn-primary" href="/sms" style="margin-top:.8rem">Try another number</a>
+        {% else %}
+          <div class="status expired">This order failed — you were not charged.</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  {% if o.status.value == "waiting_sms" %}
+  <script>
+    async function poll() {
+      try {
+        const r = await fetch("/web/sms/{{ o.id }}/status");
+        const data = await r.json();
+        if (data.status === "completed" || data.status === "refunded") {
+          location.reload();
+          return;
+        }
+      } catch (e) { /* transient — keep polling */ }
+      setTimeout(poll, 4000);
+    }
+    setTimeout(poll, 4000);
+  </script>
+  {% endif %}
+
+  <script>
+    document.querySelectorAll(".copy-btn").forEach(btn =>
+      btn.addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(btn.dataset.value);
+          const old = btn.innerHTML;
+          btn.innerHTML = "✓ Copied";
+          setTimeout(() => { btn.innerHTML = old; }, 1400);
+        } catch (e) {}
+      }));
+  </script>
+{% endblock %}

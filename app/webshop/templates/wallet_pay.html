@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}Top up ${{ amount }} — Bondom Account{% endblock %}
+{% block content %}
+  <div class="pay-layout">
+    <div class="card pay-card">
+      <p class="pay-order muted">Wallet top-up</p>
+      <p class="price big">${{ amount }}</p>
+
+      <div class="qr-wrap">
+        <img class="qr" src="data:image/png;base64,{{ qr_b64 }}" alt="KHQR payment code for ${{ amount }}">
+      </div>
+
+      <p class="hint">Open <b>ABA</b>, <b>ACLEDA</b>, <b>Wing</b> or any Cambodian
+        banking app and scan this KHQR.</p>
+
+      <div id="status" class="status waiting" role="status" aria-live="polite">
+        <span class="spinner" aria-hidden="true"></span>
+        Waiting for payment — updates automatically
+      </div>
+      <p class="hint">QR expires: <span id="expiry"></span></p>
+    </div>
+  </div>
+
+  <script>
+    const expiresAt = new Date("{{ expires_at }}");
+    function tick() {
+      const left = Math.max(0, Math.floor((expiresAt - Date.now()) / 1000));
+      document.getElementById("expiry").textContent =
+        Math.floor(left / 60) + "m " + (left % 60) + "s";
+      if (left === 0) {
+        const s = document.getElementById("status");
+        s.className = "status expired";
+        s.innerHTML = "⌛ QR expired — <a href='/wallet'>start a new top-up</a>.";
+      }
+    }
+    tick(); setInterval(tick, 1000);
+
+    async function poll() {
+      try {
+        const r = await fetch("/web/wallet/status/{{ topup.id }}");
+        const data = await r.json();
+        if (data.status === "paid") {
+          const s = document.getElementById("status");
+          s.className = "status paid";
+          s.textContent = "✅ Payment received! Balance updated…";
+          setTimeout(() => location.href = "/wallet?success=Top-up+received", 1000);
+          return;
+        }
+      } catch (e) {}
+      setTimeout(poll, 4000);
+    }
+    poll();
+  </script>
+{% endblock %}

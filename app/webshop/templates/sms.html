@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}SMS Numbers — Bondom Account{% endblock %}
+{% block content %}
+  <div class="page-head">
+    <h1>📱 SMS Activation Numbers</h1>
+    {% if session_user %}
+      <div class="head-actions">
+        <span class="wallet-chip" title="Wallet balance">💰 ${{ balance_str }}</span>
+        <a class="btn btn-outline btn-sm" href="/wallet">+ Top up</a>
+        <a class="btn btn-ghost btn-sm" href="/my/sms">My numbers</a>
+      </div>
+    {% endif %}
+  </div>
+  <p class="muted" style="margin-bottom:1rem">
+    Rent a real phone number, receive the verification SMS here, done.
+    Paid from your wallet balance — unused numbers are refunded automatically.
+  </p>
+
+  {% if error %}<p class="alert error" role="alert">⚠ {{ error }}</p>{% endif %}
+  {% if stock_error %}<p class="alert error" role="alert">⚠ {{ stock_error }}</p>{% endif %}
+
+  {% if not session_user %}
+    <div class="login-box" id="signin">
+      <p>Sign in with Telegram to rent numbers:</p>
+      <script async src="https://telegram.org/js/telegram-widget.js?22"
+              data-telegram-login="{{ bot_username }}"
+              data-size="large"
+              data-auth-url="{{ auth_url }}"
+              data-request-access="write"></script>
+    </div>
+  {% endif %}
+
+  {% for category, offers in stock.items() %}
+    <section class="category">
+      <h2>{% if category == "facebook" %}📘 Facebook{% else %}📸 Instagram{% endif %}</h2>
+      {% if offers %}
+        <div class="grid sms-grid">
+          {% for offer in offers %}
+            <div class="card sms-offer">
+              <div class="sms-country">
+                <span class="sms-flag" aria-hidden="true">{{ offer.flag }}</span>
+                <div>
+                  <h3>{{ offer.country }}</h3>
+                  <span class="muted" style="font-size:.82rem">{{ offer.code }}</span>
+                </div>
+              </div>
+              <div class="pc-foot">
+                <span class="price">${{ "%.2f" | format(offer.price) }}</span>
+                {% if session_user %}
+                  {% if balance >= offer.price %}
+                    <form method="post" action="/web/sms/buy">
+                      <input type="hidden" name="category" value="{{ category }}">
+                      <input type="hidden" name="country" value="{{ offer.code }}">
+                      <button type="submit" class="btn btn-primary btn-sm">Get number</button>
+                    </form>
+                  {% else %}
+                    <a class="btn btn-outline btn-sm" href="/wallet"
+                       title="Balance too low — top up first">Top up to buy</a>
+                  {% endif %}
+                {% endif %}
+              </div>
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p class="muted">No countries available right now.</p>
+      {% endif %}
+    </section>
+  {% endfor %}
+
+  <div class="card" style="margin-top:1.5rem">
+    <h3 style="margin-bottom:.5rem">How it works</h3>
+    <ol class="how-list">
+      <li>Top up your wallet with KHQR (any Cambodian banking app).</li>
+      <li>Pick a service and country — the price you see is the price you pay.</li>
+      <li>Use the rented number on Facebook/Instagram to request the code.</li>
+      <li>The SMS code appears here within seconds. No SMS? Automatic refund.</li>
+    </ol>
+  </div>
+{% endblock %}
