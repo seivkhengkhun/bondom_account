@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}My Orders — Bondom Account{% endblock %}
+{% block content %}
+  <div class="card">
+    <h1>📦 My Orders</h1>
+    <p class="meta">💰 Wallet balance: <b>${{ balance }}</b></p>
+    {% if orders %}
+      <table class="orders-table">
+        <thead>
+          <tr><th>Order</th><th>Total</th><th>Status</th><th>Date</th><th></th></tr>
+        </thead>
+        <tbody>
+          {% for o in orders %}
+            <tr>
+              <td>#{{ o.id }}</td>
+              <td>${{ o.total_price }}</td>
+              <td>
+                <span class="badge {% if o.status.value == 'delivered' %}ok{% elif o.status.value == 'pending' %}warn{% elif o.status.value == 'canceled' %}out{% endif %}">
+                  {{ o.status.value }}
+                </span>
+              </td>
+              <td>{{ o.created_at.strftime("%Y-%m-%d %H:%M") }}</td>
+              <td>
+                {% if o.status.value == "pending" %}
+                  <a class="btn small" href="/pay/{{ o.id }}">Pay now</a>
+                {% else %}
+                  <a class="btn small" href="/order/{{ o.id }}">View</a>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p>No orders yet — <a href="/">browse the catalog</a> to get started.</p>
+    {% endif %}
+  </div>
+{% endblock %}

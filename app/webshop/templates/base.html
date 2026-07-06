@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Bondom Account — Digital Store{% endblock %}</title>
+  <link rel="stylesheet" href="/web/static/shop.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛍</text></svg>">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/">🛍 <span>Bondom Account</span></a>
+    <nav>
+      <a href="/">Catalog</a>
+      {% if session_user %}
+        <a href="/my/orders">My Orders</a>
+        <span class="user-chip">@{{ session_user.u or session_user.tid }}</span>
+        <a class="muted" href="/logout">Sign out</a>
+      {% endif %}
+    </nav>
+  </header>
+
+  <main class="container">
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="footer">
+    <p>Bondom Account — instant digital delivery · Pay with KHQR (ABA, ACLEDA, Wing, Bakong…)</p>
+    <p><a href="https://t.me/{{ bot_username }}">💬 Telegram bot: @{{ bot_username }}</a></p>
+  </footer>
+</body>
+</html>

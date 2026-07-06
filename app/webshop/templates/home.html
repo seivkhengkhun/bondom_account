@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block content %}
+  <section class="hero">
+    <h1>Premium digital accounts, delivered instantly</h1>
+    <p>Pay with any Cambodian banking app via KHQR — your items arrive on this
+       site <em>and</em> in your Telegram chat the moment payment confirms.</p>
+    {% if not session_user %}
+      <div class="login-box">
+        <p>Sign in with Telegram to buy:</p>
+        <script async src="https://telegram.org/js/telegram-widget.js?22"
+                data-telegram-login="{{ bot_username }}"
+                data-size="large"
+                data-auth-url="{{ auth_url }}"
+                data-request-access="write"></script>
+        {% if login_failed %}<p class="error">Login failed — please try again.</p>{% endif %}
+      </div>
+    {% endif %}
+    {% if error %}<p class="error">⚠ {{ error }}</p>{% endif %}
+  </section>
+
+  {% for category, items in grouped.items() %}
+    <section class="category">
+      <h2>📂 {{ category }}</h2>
+      <div class="grid">
+        {% for o in items %}
+          <a class="card product-card" href="/p/{{ o.product.id }}">
+            <h3>{{ o.product.name }}</h3>
+            <p class="price">${{ o.product.price }}</p>
+            <p class="meta">
+              {% if show_stock %}
+                {% if o.available > 0 %}
+                  <span class="badge ok">{{ o.available }} in stock</span>
+                {% else %}
+                  <span class="badge out">Out of stock</span>
+                {% endif %}
+              {% endif %}
+              {% if o.product.warranty_days %}
+                <span class="badge warranty">🛡 {{ o.product.warranty_days }}d warranty</span>
+              {% endif %}
+            </p>
+          </a>
+        {% endfor %}
+      </div>
+    </section>
+  {% else %}
+    <p>No products available right now — check back soon.</p>
+  {% endfor %}
+{% endblock %}

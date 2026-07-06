@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}{{ o.product.name }} — Bondom Account{% endblock %}
+{% block content %}
+  <a class="back" href="/">← Back to catalog</a>
+  <div class="card product-detail">
+    <h1>{{ o.product.name }}</h1>
+    <p class="price big">${{ o.product.price }}</p>
+    <p class="meta">
+      <span class="badge">{{ o.product.category }}</span>
+      {% if show_stock %}
+        {% if o.available > 0 %}
+          <span class="badge ok">{{ o.available }} in stock</span>
+        {% else %}
+          <span class="badge out">Out of stock</span>
+        {% endif %}
+      {% endif %}
+      {% if o.product.warranty_days %}
+        <span class="badge warranty">🛡 {{ o.product.warranty_days }} days warranty</span>
+      {% endif %}
+    </p>
+    {% if note %}
+      <div class="note">📝 {{ note }}</div>
+    {% endif %}
+    {% if error %}<p class="error">⚠ {{ error }}</p>{% endif %}
+
+    {% if session_user %}
+      {% if o.available > 0 %}
+        <form method="post" action="/web/buy" class="buy-form">
+          <input type="hidden" name="product_id" value="{{ o.product.id }}">
+          <label>Quantity
+            <input type="number" name="quantity" value="1" min="1" max="{{ o.available }}">
+          </label>
+          <button type="submit" class="btn primary">🛒 Buy with KHQR</button>
+        </form>
+        <p class="hint">You'll get a KHQR to scan with ABA, ACLEDA, Wing, Bakong or any Cambodian banking app. Items are delivered here and to your Telegram.</p>
+      {% else %}
+        <p class="error">This product is currently out of stock.</p>
+      {% endif %}
+    {% else %}
+      <div class="login-box">
+        <p>Sign in with Telegram to buy:</p>
+        <script async src="https://telegram.org/js/telegram-widget.js?22"
+                data-telegram-login="{{ bot_username }}"
+                data-size="large"
+                data-auth-url="{{ auth_url }}"
+                data-request-access="write"></script>
+      </div>
+    {% endif %}
+  </div>
+{% endblock %}

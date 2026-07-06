@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Pay order #{{ order.id }} — Bondom Account{% endblock %}
+{% block content %}
+  <div class="card pay-card">
+    <h1>Scan to pay — order #{{ order.id }}</h1>
+    <p class="price big">${{ amount }}</p>
+    <img class="qr" src="data:image/png;base64,{{ qr_b64 }}" alt="KHQR code">
+    <p class="hint">Open ABA, ACLEDA, Wing, Bakong or any Cambodian banking app and scan this KHQR.</p>
+    <p id="status" class="status waiting">⏳ Waiting for payment… this page updates automatically.</p>
+    <p class="hint">QR expires: <span id="expiry"></span></p>
+  </div>
+
+  <script>
+    const expiresAt = new Date("{{ expires_at }}");
+    function tick() {
+      const left = Math.max(0, Math.floor((expiresAt - Date.now()) / 1000));
+      document.getElementById("expiry").textContent =
+        Math.floor(left / 60) + "m " + (left % 60) + "s";
+      if (left === 0) {
+        document.getElementById("status").textContent =
+          "⌛ QR expired — please create a new order.";
+        document.getElementById("status").className = "status expired";
+      }
+    }
+    tick(); setInterval(tick, 1000);
+
+    async function poll() {
+      try {
+        const r = await fetch("/web/status/{{ order.id }}");
+        const data = await r.json();
+        if (data.status === "paid" || data.status === "delivered") {
+          document.getElementById("status").textContent =
+            "✅ Payment received! Loading your items…";
+          document.getElementById("status").className = "status paid";
+          setTimeout(() => location.href = "/order/{{ order.id }}", 1200);
+          return;
+        }
+        if (data.status === "canceled") {
+          document.getElementById("status").textContent = "Order canceled.";
+          return;
+        }
+      } catch (e) { /* transient network error — keep polling */ }
+      setTimeout(poll, 4000);
+    }
+    poll();
+  </script>
+{% endblock %}

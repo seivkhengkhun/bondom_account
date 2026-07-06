@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Order #{{ order.id }} — Bondom Account{% endblock %}
+{% block content %}
+  <a class="back" href="/my/orders">← My orders</a>
+  <div class="card">
+    <h1>
+      {% if order.status.value == "delivered" %}✅{% elif order.status.value == "paid" %}💰{% elif order.status.value == "pending" %}⏳{% else %}❌{% endif %}
+      Order #{{ order.id }} — {{ order.status.value }}
+    </h1>
+    <p class="meta">Total: <b>${{ order.total_price }}</b> · {{ order.created_at.strftime("%Y-%m-%d %H:%M") }}</p>
+
+    {% if order.status.value in ("delivered", "paid") %}
+      {% for s in sections %}
+        <div class="delivery">
+          <h3>📦 {{ s.name }}</h3>
+          <ul class="items">
+            {% for value in s["items"] %}
+              <li><code>{{ value }}</code></li>
+            {% endfor %}
+          </ul>
+          {% if s.warranty %}<p class="badge warranty">🛡 Warranty: {{ s.warranty }} days</p>{% endif %}
+          {% if s.note %}<div class="note">📝 {{ s.note }}</div>{% endif %}
+        </div>
+      {% endfor %}
+      <p class="hint">A copy was also sent to your Telegram chat with the bot.</p>
+    {% elif order.status.value == "pending" %}
+      <p>This order is awaiting payment. <a href="/pay/{{ order.id }}">Open the payment QR →</a></p>
+    {% else %}
+      <p>This order was canceled and its stock returned.</p>
+    {% endif %}
+  </div>
+{% endblock %}

@@ -1,0 +1,187 @@
+:root {
+  --bg: #0f1117;
+  --surface: #171a23;
+  --surface-2: #1e2230;
+  --border: #2a2f40;
+  --text: #e8eaf2;
+  --muted: #9aa1b5;
+  --accent: #6366f1;
+  --accent-hover: #818cf8;
+  --green: #34d399;
+  --red: #f87171;
+  --amber: #fbbf24;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Segoe UI", system-ui, -apple-system, "Noto Sans Khmer", sans-serif;
+  line-height: 1.55;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+a { color: var(--accent-hover); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.8rem 1.2rem;
+  background: rgba(23, 26, 35, 0.85);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  flex-wrap: wrap;
+}
+
+.brand { font-size: 1.15rem; font-weight: 700; color: var(--text); }
+.brand:hover { text-decoration: none; }
+.topbar nav { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+.topbar nav a { color: var(--text); font-weight: 500; }
+.topbar .muted { color: var(--muted); }
+.user-chip {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.15rem 0.7rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.container { flex: 1; width: 100%; max-width: 64rem; margin: 0 auto; padding: 1.5rem 1.2rem; }
+
+.hero { text-align: center; padding: 2rem 0 1rem; }
+.hero h1 { font-size: 1.7rem; margin-bottom: 0.5rem; }
+.hero p { color: var(--muted); max-width: 38rem; margin: 0 auto; }
+
+.login-box {
+  margin: 1.2rem auto;
+  padding: 1rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  display: inline-block;
+  text-align: center;
+}
+.login-box p { margin-bottom: 0.6rem; color: var(--muted); }
+
+.category { margin-top: 1.8rem; }
+.category h2 { font-size: 1.15rem; margin-bottom: 0.8rem; }
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 0.9rem;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 1.1rem 1.2rem;
+}
+
+.product-card { display: block; color: var(--text); transition: border-color .15s, transform .15s; }
+.product-card:hover { border-color: var(--accent); transform: translateY(-2px); text-decoration: none; }
+.product-card h3 { font-size: 1rem; margin-bottom: 0.4rem; }
+
+.price { color: var(--green); font-weight: 700; }
+.price.big { font-size: 1.6rem; margin: 0.4rem 0; }
+
+.meta { margin: 0.5rem 0; display: flex; gap: 0.4rem; flex-wrap: wrap; align-items: center; color: var(--muted); }
+
+.badge {
+  display: inline-block;
+  padding: 0.1rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+.badge.ok { color: var(--green); border-color: rgba(52, 211, 153, .35); background: rgba(52, 211, 153, .08); }
+.badge.out { color: var(--red); border-color: rgba(248, 113, 113, .35); background: rgba(248, 113, 113, .08); }
+.badge.warn { color: var(--amber); border-color: rgba(251, 191, 36, .35); background: rgba(251, 191, 36, .08); }
+.badge.warranty { color: var(--amber); }
+
+.note {
+  margin: 0.8rem 0;
+  padding: 0.7rem 0.9rem;
+  background: rgba(251, 191, 36, 0.07);
+  border: 1px solid rgba(251, 191, 36, 0.25);
+  border-radius: 10px;
+  white-space: pre-line;
+  font-size: 0.92rem;
+}
+
+.error { color: var(--red); margin: 0.6rem 0; }
+.hint { color: var(--muted); font-size: 0.88rem; margin-top: 0.6rem; }
+.back { display: inline-block; margin-bottom: 0.8rem; color: var(--muted); }
+
+.product-detail { max-width: 34rem; margin: 0 auto; }
+.buy-form { display: flex; gap: 0.8rem; align-items: end; margin-top: 1rem; flex-wrap: wrap; }
+.buy-form label { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.85rem; color: var(--muted); }
+.buy-form input[type="number"] {
+  width: 6rem;
+  padding: 0.55rem 0.7rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text);
+  font-size: 1rem;
+}
+
+.btn {
+  display: inline-block;
+  border: none;
+  border-radius: 10px;
+  padding: 0.6rem 1.2rem;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+.btn.primary { background: var(--accent); border-color: var(--accent); color: white; }
+.btn.primary:hover { background: var(--accent-hover); }
+.btn.small { padding: 0.25rem 0.8rem; font-size: 0.85rem; }
+a.btn:hover { text-decoration: none; }
+
+.pay-card { max-width: 26rem; margin: 0 auto; text-align: center; }
+.qr { width: 100%; max-width: 320px; border-radius: 12px; margin: 0.8rem auto; display: block; background: white; padding: 8px; }
+.status { font-weight: 600; margin: 0.8rem 0 0.3rem; }
+.status.waiting { color: var(--amber); }
+.status.paid { color: var(--green); }
+.status.expired { color: var(--red); }
+
+.delivery { margin: 1rem 0; padding: 0.9rem 1rem; background: var(--surface-2); border-radius: 12px; }
+.delivery h3 { margin-bottom: 0.5rem; }
+.items { list-style: none; }
+.items li { margin: 0.25rem 0; }
+.items code {
+  background: var(--bg);
+  padding: 0.2rem 0.55rem;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  word-break: break-all;
+}
+
+.orders-table { width: 100%; border-collapse: collapse; margin-top: 0.8rem; }
+.orders-table th, .orders-table td { text-align: left; padding: 0.55rem 0.6rem; border-bottom: 1px solid var(--border); font-size: 0.93rem; }
+.orders-table th { color: var(--muted); font-weight: 600; font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.04em; }
+
+.footer { text-align: center; color: var(--muted); font-size: 0.85rem; padding: 1.5rem; border-top: 1px solid var(--border); margin-top: 2rem; }
+
+@media (max-width: 600px) {
+  .hero h1 { font-size: 1.3rem; }
+  .container { padding: 1rem 0.8rem; }
+}

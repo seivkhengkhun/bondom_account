@@ -51,6 +51,20 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Customer web storefront — HTML pages sharing the same service layer.
+from pathlib import Path
+
+from fastapi.staticfiles import StaticFiles
+
+from app.webshop.routes import router as webshop_router
+
+app.include_router(webshop_router)
+app.mount(
+    "/web/static",
+    StaticFiles(directory=str(Path(__file__).parent.parent / "webshop" / "static")),
+    name="webshop-static",
+)
+
 
 # --------------------------------------------------------------------------- #
 # Domain exception -> HTTP response mapping
