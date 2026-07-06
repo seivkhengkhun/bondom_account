@@ -7,41 +7,54 @@
     <span class="current">#{{ o.id }}</span>
   </nav>
 
-  <div class="pay-layout">
-    <div class="card pay-card">
-      <p class="pay-order muted">
-        {% if o.category == "facebook" %}📘 Facebook{% else %}📸 Instagram{% endif %}
-        · {{ o.country }} · ${{ "%.2f" | format(o.price) }}
-      </p>
+  <div class="sms-order-wrap">
+    {# ---- status timeline ---- #}
+    <ol class="sms-timeline" aria-label="Status">
+      <li class="done"><span class="tl-dot"><svg class="ic sm" aria-hidden="true"><use href="#i-check"/></svg></span>Number rented</li>
+      <li class="{% if o.status.value in ('completed','refunded') %}done{% elif o.status.value == 'waiting_sms' %}active{% endif %}">
+        <span class="tl-dot">2</span>Waiting for SMS</li>
+      <li class="{% if o.status.value == 'completed' %}done{% elif o.status.value == 'refunded' %}cancel{% endif %}">
+        <span class="tl-dot">{% if o.status.value == 'refunded' %}↺{% else %}3{% endif %}</span>
+        {% if o.status.value == 'refunded' %}Refunded{% else %}Code received{% endif %}</li>
+    </ol>
 
-      <p class="muted" style="font-size:.85rem;margin-top:.8rem">Your rented number</p>
+    <div class="card sms-order-card">
+      <div class="sms-order-head">
+        <span class="sms-svc-tag {{ o.category }}">
+          {% if o.category == "facebook" %}📘 Facebook{% else %}📸 Instagram{% endif %}
+        </span>
+        <span class="muted">{{ o.country }} · ${{ "%.2f" | format(o.price) }}</span>
+      </div>
+
+      <span class="muted" style="font-size:.82rem">Your rented number</span>
       <div class="phone-row">
         <span class="phone-big" id="phone">{{ o.phone }}</span>
-        <button class="btn btn-ghost btn-sm copy-btn" data-value="{{ o.phone }}" aria-label="Copy phone number">
+        <button class="btn btn-ghost btn-sm copy-btn" data-value="{{ o.phone }}" aria-label="Copy number">
           <svg class="ic sm" aria-hidden="true"><use href="#i-copy"/></svg> Copy
         </button>
       </div>
       <p class="hint">Enter this number on
-        {{ "Facebook" if o.category == "facebook" else "Instagram" }} and request the SMS code.</p>
+        {{ "Facebook" if o.category == "facebook" else "Instagram" }} and request the code.</p>
 
-      <div id="otp-area">
+      <div id="otp-area" class="sms-otp-area">
         {% if o.status.value == "completed" %}
-          <p class="muted" style="margin-top:1rem">Your SMS code</p>
+          <span class="muted" style="font-size:.82rem">Your SMS code</span>
           <div class="otp-code">{{ o.otp_code }}</div>
           <button class="btn btn-primary copy-btn" data-value="{{ o.otp_code }}">
             <svg class="ic sm" aria-hidden="true"><use href="#i-copy"/></svg> Copy code
           </button>
         {% elif o.status.value == "waiting_sms" %}
           <div class="status waiting" id="status" role="status" aria-live="polite">
-            <span class="spinner" aria-hidden="true"></span>
-            Waiting for the SMS code…
+            <span class="spinner" aria-hidden="true"></span> Waiting for the SMS code…
           </div>
           <p class="hint">Keep this page open — the code appears automatically.
-            If no SMS arrives, your ${{ "%.2f" | format(o.price) }} is refunded.</p>
+            No SMS? Your ${{ "%.2f" | format(o.price) }} is refunded.</p>
         {% elif o.status.value == "refunded" %}
-          <div class="status expired">No SMS received — ${{ "%.2f" | format(o.price) }}
-            was refunded to your wallet.</div>
-          <a class="btn btn-primary" href="/sms" style="margin-top:.8rem">Try another number</a>
+          <div class="sms-refund-box">
+            <p class="status expired" style="justify-content:flex-start">↺ No SMS received</p>
+            <p class="muted">${{ "%.2f" | format(o.price) }} was refunded to your wallet.</p>
+          </div>
+          <a class="btn btn-primary btn-block" href="/sms" style="margin-top:.8rem">Try another number</a>
         {% else %}
           <div class="status expired">This order failed — you were not charged.</div>
         {% endif %}
@@ -54,27 +67,20 @@
     async function poll() {
       try {
         const r = await fetch("/web/sms/{{ o.id }}/status");
-        const data = await r.json();
-        if (data.status === "completed" || data.status === "refunded") {
-          location.reload();
-          return;
-        }
-      } catch (e) { /* transient — keep polling */ }
+        const d = await r.json();
+        if (d.status === "completed" || d.status === "refunded") { location.reload(); return; }
+      } catch (e) {}
       setTimeout(poll, 4000);
     }
     setTimeout(poll, 4000);
   </script>
   {% endif %}
-
   <script>
-    document.querySelectorAll(".copy-btn").forEach(btn =>
-      btn.addEventListener("click", async () => {
-        try {
-          await navigator.clipboard.writeText(btn.dataset.value);
-          const old = btn.innerHTML;
-          btn.innerHTML = "✓ Copied";
-          setTimeout(() => { btn.innerHTML = old; }, 1400);
-        } catch (e) {}
+    document.querySelectorAll(".copy-btn").forEach(b =>
+      b.addEventListener("click", async () => {
+        try { await navigator.clipboard.writeText(b.dataset.value);
+          const o = b.innerHTML; b.innerHTML = "✓ Copied";
+          setTimeout(() => b.innerHTML = o, 1400); } catch (e) {}
       }));
   </script>
 {% endblock %}

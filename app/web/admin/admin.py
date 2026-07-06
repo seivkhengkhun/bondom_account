@@ -69,6 +69,21 @@ class UserRow:
     balance: str
 
 
+@dataclasses.dataclass
+class SmsRow:
+    id: int
+    user: str
+    service: str
+    country: str
+    phone: str
+    cost: str
+    price: str
+    profit: str
+    status: str
+    otp: str
+    created_at: str
+
+
 class AdminState(rx.State):
     # Auth — every mutating handler re-checks ``authed`` server-side, so
     # the gate holds even against hand-crafted websocket events.
@@ -86,6 +101,18 @@ class AdminState(rx.State):
     products: list[ProductRow] = []
     orders: list[OrderRow] = []
     users: list[UserRow] = []
+    sms_orders: list[SmsRow] = []
+
+    # SMS activation
+    sms_markup: str = "0.03"
+    sms_markup_message: str = ""
+    sms_stat_completed: int = 0
+    sms_stat_waiting: int = 0
+    sms_stat_refunded: int = 0
+    sms_stat_revenue: str = "0.00"
+    sms_stat_cost: str = "0.00"
+    sms_stat_profit: str = "0.00"
+    sms_search: str = ""
 
     product_options: list[str] = []
     selected_product: str = ""
@@ -111,6 +138,27 @@ class AdminState(rx.State):
 
     def set_user_search(self, v: str) -> None:
         self.user_search = v
+
+    def set_sms_search(self, v: str) -> None:
+        self.sms_search = v
+
+    def set_sms_markup(self, v: str) -> None:
+        self.sms_markup = v
+
+    @rx.var
+    def filtered_sms(self) -> list[SmsRow]:
+        q = self.sms_search.strip().lower()
+        if not q:
+            return self.sms_orders
+        return [
+            r
+            for r in self.sms_orders
+            if q in r.user.lower()
+            or q in r.country.lower()
+            or q in r.phone.lower()
+            or q in r.service.lower()
+            or q == str(r.id)
+        ]
 
     @rx.var
     def filtered_products(self) -> list[ProductRow]:
@@ -295,6 +343,74 @@ class AdminState(rx.State):
         async with AsyncSessionLocal() as session:
             for row in self.users:
                 row.balance = f"{(await services.get_user_balance(session, row.id)):.2f}"
+
+        await self._load_sms()
+
+    async def _load_sms(self) -> None:
+        from shared import sms_service
+
+        username_by_id = {u.id: u.username for u in self.users}
+        async with AsyncSessionLocal() as session:
+            stats = await sms_service.sms_stats(session)
+            markup = await sms_service.get_markup(session)
+            sms_orders = await sms_service.list_sms_orders(session, limit=300)
+            missing = {
+                o.user_id for o in sms_orders if o.user_id not in username_by_id
+            }
+            for uid in missing:
+                user = await session.get(services.User, uid)
+                username_by_id[uid] = (
+                    (user.username or str(user.telegram_id))
+                    if user else f"user {uid}"
+                )
+
+        self.sms_markup = f"{markup:.2f}"
+        self.sms_stat_completed = stats["completed"]
+        self.sms_stat_waiting = stats["waiting"]
+        self.sms_stat_refunded = stats["refunded"]
+        self.sms_stat_revenue = f"{stats['revenue']:.2f}"
+        self.sms_stat_cost = f"{stats['cost']:.2f}"
+        self.sms_stat_profit = f"{stats['profit']:.2f}"
+        self.sms_orders = [
+            SmsRow(
+                id=o.id,
+                user=username_by_id.get(o.user_id, f"user {o.user_id}"),
+                service=o.category.title(),
+                country=o.country,
+                phone=o.phone or "—",
+                cost=f"{o.cost:.3f}",
+                price=f"{o.price:.2f}",
+                profit=f"{(o.price - o.cost):.2f}"
+                if o.status.value == "completed" else "0.00",
+                status=o.status.value,
+                otp=o.otp_code or "—",
+                created_at=o.created_at.strftime("%Y-%m-%d %H:%M"),
+            )
+            for o in sms_orders
+        ]
+
+    async def save_sms_markup(self) -> None:
+        if not self.authed:
+            return
+        from decimal import Decimal, InvalidOperation
+        from shared import sms_service
+
+        try:
+            value = Decimal(self.sms_markup or "0")
+        except InvalidOperation:
+            self.sms_markup_message = "⚠ Invalid markup amount."
+            return
+        try:
+            async with AsyncSessionLocal() as session:
+                stored = await sms_service.set_markup(session, value)
+        except sms_service.SmsServiceError as exc:
+            self.sms_markup_message = f"⚠ {exc}"
+            return
+        self.sms_markup = f"{stored:.2f}"
+        self.sms_markup_message = (
+            f"✅ Markup set to ${stored:.2f} — applies to new purchases."
+        )
+        await self._load_sms()
 
     # ----------------------------------------------------------------- #
     # Add product
@@ -1516,6 +1632,155 @@ def marketing_tab() -> rx.Component:
 
 
 # --------------------------------------------------------------------------- #
+# SMS activation tab
+# --------------------------------------------------------------------------- #
+def _sms_status_badge(status) -> rx.Component:
+    return rx.badge(
+        rx.match(
+            status,
+            ("completed", "Code received"),
+            ("waiting_sms", "Waiting SMS"),
+            ("refunded", "Refunded"),
+            ("failed", "Failed"),
+            status,
+        ),
+        color_scheme=rx.match(
+            status,
+            ("completed", "green"),
+            ("waiting_sms", "amber"),
+            ("refunded", "gray"),
+            ("failed", "red"),
+            "gray",
+        ),
+        variant="soft",
+    )
+
+
+def _sms_row(r: SmsRow) -> rx.Component:
+    return rx.table.row(
+        rx.table.cell(rx.text(r.id, color_scheme="gray")),
+        rx.table.cell(rx.text(r.user, weight="medium")),
+        rx.table.cell(r.service),
+        rx.table.cell(r.country),
+        rx.table.cell(rx.text(r.phone, size="1")),
+        rx.table.cell("$" + r.cost),
+        rx.table.cell("$" + r.price),
+        rx.table.cell(rx.text("$" + r.profit, color_scheme="green")),
+        rx.table.cell(_sms_status_badge(r.status)),
+        rx.table.cell(
+            rx.cond(
+                r.otp != "—",
+                rx.code(r.otp),
+                rx.text("—", color_scheme="gray"),
+            )
+        ),
+        rx.table.cell(rx.text(r.created_at, color_scheme="gray", size="1")),
+        align="center",
+    )
+
+
+def sms_tab() -> rx.Component:
+    return rx.vstack(
+        rx.grid(
+            stat_card("banknote", "SMS revenue", "$" + AdminState.sms_stat_revenue, "green"),
+            stat_card("credit-card", "Provider cost", "$" + AdminState.sms_stat_cost, "amber"),
+            stat_card("trending-up", "Profit", "$" + AdminState.sms_stat_profit, "green"),
+            stat_card("badge-check", "Completed", AdminState.sms_stat_completed, "blue"),
+            stat_card("hourglass", "Waiting", AdminState.sms_stat_waiting, "amber"),
+            columns=rx.breakpoints(initial="2", sm="3", lg="5"),
+            spacing="3",
+            width="100%",
+        ),
+        rx.card(
+            rx.vstack(
+                card_header(
+                    "percent",
+                    "Profit margin (markup)",
+                    "Added to every SMS number's provider cost. Applies to "
+                    "new purchases immediately.",
+                ),
+                rx.hstack(
+                    rx.text("$", size="4", weight="bold"),
+                    rx.input(
+                        type="number",
+                        value=AdminState.sms_markup,
+                        on_change=AdminState.set_sms_markup,
+                        width="8em",
+                        size="3",
+                    ),
+                    rx.button(
+                        rx.icon("save", size=16),
+                        "Save markup",
+                        on_click=AdminState.save_sms_markup,
+                        size="2",
+                    ),
+                    spacing="2",
+                    align="center",
+                ),
+                section_message(AdminState.sms_markup_message),
+                spacing="3",
+                width="100%",
+            ),
+            size="3",
+            width="100%",
+        ),
+        rx.card(
+            rx.vstack(
+                rx.hstack(
+                    card_header(
+                        "message-square-text",
+                        "SMS order history",
+                        "Every rented number with cost, price, and profit.",
+                    ),
+                    rx.spacer(),
+                    search_box(
+                        "Search SMS…",
+                        AdminState.sms_search,
+                        AdminState.set_sms_search,
+                    ),
+                    width="100%",
+                    align="start",
+                    wrap="wrap",
+                ),
+                rx.box(
+                    rx.table.root(
+                        rx.table.header(
+                            rx.table.row(
+                                rx.table.column_header_cell("ID"),
+                                rx.table.column_header_cell("User"),
+                                rx.table.column_header_cell("Service"),
+                                rx.table.column_header_cell("Country"),
+                                rx.table.column_header_cell("Phone"),
+                                rx.table.column_header_cell("Cost"),
+                                rx.table.column_header_cell("Price"),
+                                rx.table.column_header_cell("Profit"),
+                                rx.table.column_header_cell("Status"),
+                                rx.table.column_header_cell("Code"),
+                                rx.table.column_header_cell("Time"),
+                            )
+                        ),
+                        rx.table.body(
+                            rx.foreach(AdminState.filtered_sms, _sms_row)
+                        ),
+                        variant="surface",
+                        size="1",
+                        width="100%",
+                    ),
+                    overflow_x="auto",
+                    width="100%",
+                ),
+                spacing="4",
+                width="100%",
+            ),
+            size="3",
+            width="100%",
+        ),
+        spacing="4",
+        width="100%",
+    )
+
+
+# --------------------------------------------------------------------------- #
 # Page shell
 # --------------------------------------------------------------------------- #
 def _tab_trigger(icon_name: str, label: str, value: str) -> rx.Component:
@@ -1581,6 +1846,7 @@ def dashboard_view() -> rx.Component:
                         _tab_trigger("boxes", "Products", "products"),
                         _tab_trigger("shopping-cart", "Orders", "orders"),
                         _tab_trigger("users", "Users", "users"),
+                        _tab_trigger("smartphone", "SMS", "sms"),
                         _tab_trigger("megaphone", "Marketing", "marketing"),
                         size="2",
                     ),
@@ -1592,6 +1858,9 @@ def dashboard_view() -> rx.Component:
                     ),
                     rx.tabs.content(
                         users_tab(), value="users", padding_top="1.2em"
+                    ),
+                    rx.tabs.content(
+                        sms_tab(), value="sms", padding_top="1.2em"
                     ),
                     rx.tabs.content(
                         marketing_tab(), value="marketing", padding_top="1.2em"

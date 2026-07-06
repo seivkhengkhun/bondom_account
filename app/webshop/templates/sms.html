@@ -1,20 +1,22 @@
 {% extends "base.html" %}
 {% block title %}SMS Numbers — Bondom Account{% endblock %}
 {% block content %}
-  <div class="page-head">
-    <h1>📱 SMS Activation Numbers</h1>
+  <section class="sms-hero">
+    <div class="sms-hero-text">
+      <h1>📱 SMS Verification Numbers</h1>
+      <p class="hero-sub" style="margin-left:0">
+        Rent a real number, receive the Facebook or Instagram code here in
+        seconds. Paid from your wallet — no code means an automatic refund.</p>
+    </div>
     {% if session_user %}
-      <div class="head-actions">
-        <span class="wallet-chip" title="Wallet balance">💰 ${{ balance_str }}</span>
-        <a class="btn btn-outline btn-sm" href="/wallet">+ Top up</a>
-        <a class="btn btn-ghost btn-sm" href="/my/sms">My numbers</a>
+      <div class="sms-wallet-card">
+        <span class="muted" style="font-size:.8rem">Wallet balance</span>
+        <span class="sms-wallet-amt">${{ balance_str }}</span>
+        <a class="btn btn-primary btn-sm btn-block" href="/wallet">+ Top up</a>
+        <a class="btn btn-ghost btn-sm btn-block" href="/my/sms">My numbers →</a>
       </div>
     {% endif %}
-  </div>
-  <p class="muted" style="margin-bottom:1rem">
-    Rent a real phone number, receive the verification SMS here, done.
-    Paid from your wallet balance — unused numbers are refunded automatically.
-  </p>
+  </section>
 
   {% if error %}<p class="alert error" role="alert">⚠ {{ error }}</p>{% endif %}
   {% if stock_error %}<p class="alert error" role="alert">⚠ {{ stock_error }}</p>{% endif %}
@@ -24,57 +26,77 @@
       <p>Sign in with Telegram to rent numbers:</p>
       <script async src="https://telegram.org/js/telegram-widget.js?22"
               data-telegram-login="{{ bot_username }}"
-              data-size="large"
-              data-auth-url="{{ auth_url }}"
+              data-size="large" data-auth-url="{{ auth_url }}"
               data-request-access="write"></script>
     </div>
   {% endif %}
 
-  {% for category, offers in stock.items() %}
-    <section class="category">
-      <h2>{% if category == "facebook" %}📘 Facebook{% else %}📸 Instagram{% endif %}</h2>
-      {% if offers %}
-        <div class="grid sms-grid">
-          {% for offer in offers %}
-            <div class="card sms-offer">
-              <div class="sms-country">
-                <span class="sms-flag" aria-hidden="true">{{ offer.flag }}</span>
-                <div>
-                  <h3>{{ offer.country }}</h3>
-                  <span class="muted" style="font-size:.82rem">{{ offer.code }}</span>
-                </div>
-              </div>
-              <div class="pc-foot">
-                <span class="price">${{ "%.2f" | format(offer.price) }}</span>
-                {% if session_user %}
-                  {% if balance >= offer.price %}
-                    <form method="post" action="/web/sms/buy">
-                      <input type="hidden" name="category" value="{{ category }}">
-                      <input type="hidden" name="country" value="{{ offer.code }}">
-                      <button type="submit" class="btn btn-primary btn-sm">Get number</button>
-                    </form>
-                  {% else %}
-                    <a class="btn btn-outline btn-sm" href="/wallet"
-                       title="Balance too low — top up first">Top up to buy</a>
-                  {% endif %}
-                {% endif %}
-              </div>
-            </div>
-          {% endfor %}
-        </div>
-      {% else %}
-        <p class="muted">No countries available right now.</p>
-      {% endif %}
-    </section>
-  {% endfor %}
-
-  <div class="card" style="margin-top:1.5rem">
-    <h3 style="margin-bottom:.5rem">How it works</h3>
-    <ol class="how-list">
-      <li>Top up your wallet with KHQR (any Cambodian banking app).</li>
-      <li>Pick a service and country — the price you see is the price you pay.</li>
-      <li>Use the rented number on Facebook/Instagram to request the code.</li>
-      <li>The SMS code appears here within seconds. No SMS? Automatic refund.</li>
-    </ol>
+  <div class="filter-bar" role="tablist" aria-label="SMS services">
+    <button class="pill active" data-svc="*" role="tab" aria-selected="true">All services</button>
+    {% for category in stock.keys() %}
+      <button class="pill" data-svc="{{ category }}" role="tab" aria-selected="false">
+        {% if category == "facebook" %}📘 Facebook{% else %}📸 Instagram{% endif %}
+      </button>
+    {% endfor %}
   </div>
+
+  <div class="grid sms-grid" id="sms-grid">
+    {% for category, offers in stock.items() %}
+      {% for offer in offers %}
+        <div class="card sms-offer" data-svc="{{ category }}">
+          <div class="sms-offer-top">
+            <span class="sms-flag" aria-hidden="true">{{ offer.flag }}</span>
+            <div class="sms-offer-name">
+              <h3>{{ offer.country }}</h3>
+              <span class="sms-svc-tag {{ category }}">
+                {% if category == "facebook" %}Facebook{% else %}Instagram{% endif %}
+              </span>
+            </div>
+          </div>
+          <div class="sms-offer-bottom">
+            <div>
+              <span class="muted" style="font-size:.72rem;display:block">Price</span>
+              <span class="price">${{ "%.2f" | format(offer.price) }}</span>
+            </div>
+            {% if session_user %}
+              {% if balance >= offer.price %}
+                <form method="post" action="/web/sms/buy">
+                  <input type="hidden" name="category" value="{{ category }}">
+                  <input type="hidden" name="country" value="{{ offer.code }}">
+                  <button type="submit" class="btn btn-primary btn-sm">Get number</button>
+                </form>
+              {% else %}
+                <a class="btn btn-outline btn-sm" href="/wallet">Top up</a>
+              {% endif %}
+            {% else %}
+              <a class="btn btn-outline btn-sm" href="#signin">Sign in</a>
+            {% endif %}
+          </div>
+        </div>
+      {% endfor %}
+    {% endfor %}
+  </div>
+  <p class="empty-msg" id="sms-empty" hidden>No numbers in this service right now.</p>
+
+  <div class="card sms-how">
+    <h3>How it works</h3>
+    <div class="how-steps">
+      <div class="how-step"><span class="how-num">1</span><p>Top up your wallet with KHQR (any Cambodian bank app).</p></div>
+      <div class="how-step"><span class="how-num">2</span><p>Pick a service & country — the price shown is the price you pay.</p></div>
+      <div class="how-step"><span class="how-num">3</span><p>Use the number on Facebook/Instagram to request the code.</p></div>
+      <div class="how-step"><span class="how-num">4</span><p>The code appears here automatically. No code = instant refund.</p></div>
+    </div>
+  </div>
+
+  <script>
+    const pills = document.querySelectorAll(".pill");
+    const cards = document.querySelectorAll(".sms-offer");
+    pills.forEach(p => p.addEventListener("click", () => {
+      pills.forEach(x => { x.classList.remove("active"); x.setAttribute("aria-selected","false"); });
+      p.classList.add("active"); p.setAttribute("aria-selected","true");
+      const svc = p.dataset.svc; let shown = 0;
+      cards.forEach(c => { const s = svc === "*" || c.dataset.svc === svc; c.hidden = !s; if (s) shown++; });
+      document.getElementById("sms-empty").hidden = shown > 0;
+    }));
+  </script>
 {% endblock %}

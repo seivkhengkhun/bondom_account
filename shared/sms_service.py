@@ -12,13 +12,16 @@ The provider API is plain GET with ``?key=`` auth:
     /v1/stock?category=fb             → {"status": "success", "countries": [
                                           {"country","countryCode","flag",
                                            "price": 0.03, "stock": null}]}
-    /v1/api/create-order.php          → phone + order_id (charges balance;
-                                         failed rents auto-refund)
-    /v1/api/check-otp.php?order_id=   → SMS code, or refunded/expired
+    /v1/api/create-order.php?category=&country=
+        → {"phone","order_id","status":"running","amount":0.03}
+          or {"status":"error","message":"Out of stock"}
+    /v1/api/check-otp.php?id=<order_id>   ← NOTE: param is ``id`` not
+        ``order_id`` (the published docs are wrong). Returns
+        {"status":"running","otp":"","counter":0} while waiting, and the
+        code in ``otp`` once received. Verified live 2026-07-06.
 
-check-otp / create-order response field names are parsed defensively —
-the docs show shapes but production fields were not observable without
-spending money; ``_extract_*`` helpers accept the likely variants.
+Response shapes above were confirmed by real create-order/check-otp
+calls; ``_extract_*`` helpers still accept common variants defensively.
 """
 
 import asyncio
@@ -34,7 +37,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from shared.config import settings
 from shared.database import AsyncSessionLocal
-from shared.models import SmsOrder, SmsOrderStatus
+from shared.models import AppSetting, SmsOrder, SmsOrderStatus
 from shared.services import (
     InsufficientBalanceError,  # noqa: F401  (re-exported for callers)
     add_user_balance,
@@ -43,6 +46,8 @@ from shared.services import (
 )
 
 logger = logging.getLogger(__name__)
+
+SMS_MARKUP_KEY = "sms_markup_usd"
 
 CATEGORIES = {"facebook": "fb", "instagram": "ig"}
 MAX_WAITING_PER_USER = 3
@@ -64,9 +69,56 @@ def _money(value) -> Decimal:
     return Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
-def sell_price(cost: Decimal) -> Decimal:
-    """Customer price = provider cost + fixed markup."""
-    return _money(Decimal(str(cost)) + settings.sms_markup_usd)
+# In-process cache of the DB markup so hot paths (stock listing) don't hit
+# the DB per row; refreshed on set and every MARKUP_CACHE_SECONDS.
+_markup_cache: tuple[float, Decimal] | None = None
+MARKUP_CACHE_SECONDS = 30
+
+
+async def get_markup(session: AsyncSession | None = None) -> Decimal:
+    """Current profit markup (USD). DB value overrides the .env default."""
+    global _markup_cache
+    if _markup_cache and time.monotonic() - _markup_cache[0] < MARKUP_CACHE_SECONDS:
+        return _markup_cache[1]
+
+    async def _read(s: AsyncSession) -> Decimal:
+        async with transaction_scope(s):
+            row = await s.get(AppSetting, SMS_MARKUP_KEY)
+        if row is None:
+            return _money(settings.sms_markup_usd)
+        try:
+            return _money(Decimal(row.value))
+        except Exception:
+            return _money(settings.sms_markup_usd)
+
+    if session is not None:
+        value = await _read(session)
+    else:
+        async with AsyncSessionLocal() as own:
+            value = await _read(own)
+    _markup_cache = (time.monotonic(), value)
+    return value
+
+
+async def set_markup(session: AsyncSession, markup: Decimal) -> Decimal:
+    """Persist a new markup (admin tool). Returns the stored value."""
+    global _markup_cache
+    value = _money(markup)
+    if value < 0:
+        raise SmsServiceError("Markup cannot be negative")
+    async with transaction_scope(session):
+        row = await session.get(AppSetting, SMS_MARKUP_KEY)
+        if row is None:
+            session.add(AppSetting(key=SMS_MARKUP_KEY, value=str(value)))
+        else:
+            row.value = str(value)
+    _markup_cache = (time.monotonic(), value)
+    return value
+
+
+def sell_price(cost, markup: Decimal) -> Decimal:
+    """Customer price = provider cost + markup."""
+    return _money(Decimal(str(cost)) + markup)
 
 
 async def _get(path: str, **params) -> dict:
@@ -114,6 +166,7 @@ async def get_stock(category: str, fresh: bool = False) -> list[dict]:
     if not isinstance(countries, list):
         raise SmsServiceError("SMS provider returned no stock data")
 
+    markup = await get_markup()
     offers = []
     for entry in countries:
         try:
@@ -124,7 +177,7 @@ async def get_stock(category: str, fresh: bool = False) -> list[dict]:
                     "code": str(entry.get("countryCode", "")).upper(),
                     "flag": str(entry.get("flag", "")),
                     "cost": cost,
-                    "price": sell_price(cost),
+                    "price": sell_price(cost, markup),
                     "stock": entry.get("stock"),
                 }
             )
@@ -167,13 +220,21 @@ def _extract_order_id(data: dict) -> str:
 def _extract_otp(data: dict) -> str:
     for key in ("otp", "code", "sms", "otp_code", "otpCode", "sms_code"):
         value = data.get(key)
-        if value and str(value).lower() not in ("none", "null", "waiting"):
-            return str(value)
-    message = str(data.get("message", ""))
-    match = re.search(r"\b(\d{4,8})\b", message)
-    if match and "code" in message.lower():
-        return match.group(1)
+        if value and str(value).strip().lower() not in (
+            "none", "null", "waiting", ""
+        ):
+            return str(value).strip()
     return ""
+
+
+# check-otp status values: "running" = still waiting; anything terminal
+# without an otp (refunded/expired/cancelled/timeout) means the money
+# came back to our reseller balance.
+_WAITING_STATES = {"running", "waiting", "pending", "active", "ok"}
+
+
+def _is_waiting(data: dict) -> bool:
+    return str(data.get("status", "")).strip().lower() in _WAITING_STATES
 
 
 def _is_refunded(data: dict) -> bool:
@@ -182,7 +243,9 @@ def _is_refunded(data: dict) -> bool:
     ).lower()
     return any(
         word in blob
-        for word in ("refund", "expired", "cancel", "timeout", "failed")
+        for word in (
+            "refund", "expired", "cancel", "timeout", "failed", "error"
+        )
     )
 
 
@@ -201,7 +264,10 @@ async def create_sms_order(
         raise SmsServiceError("SMS activation is currently disabled")
     category = category.lower()
     offer = await get_offer(category, country_code)
-    price = offer["price"]
+    # Recompute at purchase time with the CURRENT markup (the cached offer
+    # price could be up to a minute stale after an admin markup change).
+    markup = await get_markup(session)
+    price = sell_price(offer["cost"], markup)
 
     async with transaction_scope(session):
         waiting = await session.scalar(
@@ -228,18 +294,27 @@ async def create_sms_order(
         )
         phone = _extract_phone(data)
         provider_order_id = _extract_order_id(data)
+        status = str(data.get("status", "")).strip().lower()
+        # Real success looks like {"phone","order_id","status":"running",
+        # "amount":0.03}; failures are {"status":"error","message":"..."}.
         failed = (
             not phone
             or not provider_order_id
-            or str(data.get("status", "success")).lower()
-            in ("error", "failed", "fail")
-            or "rent failed" in str(data.get("message", "")).lower()
+            or status in ("error", "failed", "fail")
         )
         if failed:
+            message = str(data.get("message") or "").strip()
             raise SmsServiceError(
-                str(data.get("message") or "Number rental failed — "
-                    "provider had no stock. You were not charged.")
+                (f"Number rental failed: {message}. You were not charged."
+                 if message
+                 else "Number rental failed — no stock. You were not charged.")
             )
+        # Prefer the provider's actually-charged amount as our true cost.
+        try:
+            if data.get("amount") is not None:
+                offer = {**offer, "cost": Decimal(str(data["amount"]))}
+        except (ArithmeticError, TypeError):
+            pass
     except Exception as exc:
         await add_user_balance(session, user_id, price)
         logger.warning("SMS rent failed, wallet refunded: %s", exc)
@@ -291,14 +366,14 @@ async def refresh_sms_order(session: AsyncSession, order_id: int) -> SmsOrder:
             return order
 
     try:
-        data = await _get(
-            "/v1/api/check-otp.php", order_id=order.provider_order_id
-        )
+        # The live API requires ``id`` (NOT ``order_id``, despite the docs).
+        data = await _get("/v1/api/check-otp.php", id=order.provider_order_id)
     except SmsServiceError:
         return order  # transient — stay in waiting, page keeps polling
 
     otp = _extract_otp(data)
-    refunded = not otp and _is_refunded(data)
+    # Terminal-without-code = provider refunded us. While "running", wait.
+    refunded = not otp and not _is_waiting(data) and _is_refunded(data)
 
     async with transaction_scope(session):
         fresh = await session.get(SmsOrder, order_id)
@@ -352,6 +427,59 @@ async def list_user_sms_orders(
         result = await session.scalars(
             select(SmsOrder)
             .where(SmsOrder.user_id == user_id)
+            .order_by(SmsOrder.created_at.desc(), SmsOrder.id.desc())
+            .limit(limit)
+        )
+        return list(result.all())
+
+
+# --------------------------------------------------------------------------- #
+# Admin reporting
+# --------------------------------------------------------------------------- #
+async def sms_stats(session: AsyncSession) -> dict:
+    """Aggregate SMS economics for the admin dashboard.
+
+    Revenue/cost/profit count only COMPLETED orders (refunded/failed
+    orders returned the customer's money, so they net to zero).
+    """
+    async with transaction_scope(session):
+        completed = (await session.execute(
+            select(
+                func.count(SmsOrder.id),
+                func.coalesce(func.sum(SmsOrder.price), 0),
+                func.coalesce(func.sum(SmsOrder.cost), 0),
+            ).where(SmsOrder.status == SmsOrderStatus.COMPLETED)
+        )).one()
+        waiting = await session.scalar(
+            select(func.count(SmsOrder.id)).where(
+                SmsOrder.status == SmsOrderStatus.WAITING
+            )
+        )
+        refunded = await session.scalar(
+            select(func.count(SmsOrder.id)).where(
+                SmsOrder.status == SmsOrderStatus.REFUNDED
+            )
+        )
+    count, revenue, cost = completed
+    revenue = Decimal(str(revenue))
+    cost = Decimal(str(cost))
+    return {
+        "completed": int(count or 0),
+        "waiting": int(waiting or 0),
+        "refunded": int(refunded or 0),
+        "revenue": _money(revenue),
+        "cost": _money(cost),
+        "profit": _money(revenue - cost),
+    }
+
+
+async def list_sms_orders(
+    session: AsyncSession, limit: int = 200
+) -> list[SmsOrder]:
+    """All SMS orders (newest first) for the admin history table."""
+    async with transaction_scope(session):
+        result = await session.scalars(
+            select(SmsOrder)
             .order_by(SmsOrder.created_at.desc(), SmsOrder.id.desc())
             .limit(limit)
         )
