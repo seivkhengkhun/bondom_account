@@ -349,6 +349,21 @@ async def update_product_warranty_days(
     return product
 
 
+async def update_product_category(
+    session: AsyncSession, product_id: int, category: str
+) -> Product:
+    """Move a product to a category (a new name creates the category)."""
+    value = category.strip()
+    if not value:
+        raise ServiceError("category must not be empty")
+    async with transaction_scope(session):
+        product = await session.get(Product, product_id)
+        if product is None:
+            raise ProductNotFoundError(product_id)
+        product.category = value
+    return product
+
+
 async def set_product_active(
     session: AsyncSession, product_id: int, is_active: bool
 ) -> Product:

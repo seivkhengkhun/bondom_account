@@ -89,6 +89,7 @@ class AdminState(rx.State):
 
     product_options: list[str] = []
     selected_product: str = ""
+    categories: list[str] = []
     upload_message: str = ""
     bot_show_stock: bool = True
     orders_message: str = ""
@@ -97,10 +98,62 @@ class AdminState(rx.State):
     users_message: str = ""
     user_adjust_amount: str = ""
 
+    # Table search boxes
+    product_search: str = ""
+    order_search: str = ""
+    user_search: str = ""
+
+    def set_product_search(self, v: str) -> None:
+        self.product_search = v
+
+    def set_order_search(self, v: str) -> None:
+        self.order_search = v
+
+    def set_user_search(self, v: str) -> None:
+        self.user_search = v
+
+    @rx.var
+    def filtered_products(self) -> list[ProductRow]:
+        q = self.product_search.strip().lower()
+        if not q:
+            return self.products
+        return [
+            p
+            for p in self.products
+            if q in p.name.lower()
+            or q in p.category.lower()
+            or q == str(p.id)
+        ]
+
+    @rx.var
+    def filtered_orders(self) -> list[OrderRow]:
+        q = self.order_search.strip().lower()
+        if not q:
+            return self.orders
+        return [
+            o
+            for o in self.orders
+            if q in o.buyer.lower() or q in o.status.lower() or q == str(o.id)
+        ]
+
+    @rx.var
+    def filtered_users(self) -> list[UserRow]:
+        q = self.user_search.strip().lower()
+        if not q:
+            return self.users
+        return [
+            u
+            for u in self.users
+            if q in u.username.lower()
+            or q in u.telegram_id
+            or q == str(u.id)
+        ]
+
     # Add-product form
     new_name: str = ""
     new_price: str = ""
-    new_category: str = ""
+    new_category: str = ""  # free text — creates a new category
+    new_category_choice: str = ""  # picked from existing categories
     new_warranty: str = "0"
     form_message: str = ""
 
@@ -108,6 +161,8 @@ class AdminState(rx.State):
     manage_name: str = ""
     manage_price: str = ""
     manage_warranty: str = "0"
+    manage_category_choice: str = ""
+    manage_category_new: str = ""
     manage_client_note: str = ""
     manage_stock_lines: str = ""
     manage_message: str = ""
@@ -172,6 +227,9 @@ class AdminState(rx.State):
         self.product_options = [
             f"{o.product.id} — {o.product.name}" for o in overviews
         ]
+        self.categories = sorted(
+            {p.category for p in self.products if p.category}
+        )
         if self.selected_product and self.selected_product in self.product_options:
             selected_id = int(self.selected_product.split(" — ", 1)[0])
             selected = next(
@@ -181,6 +239,7 @@ class AdminState(rx.State):
                 self.manage_name = selected.name
                 self.manage_price = selected.price
                 self.manage_warranty = str(selected.warranty_days)
+                self.manage_category_choice = selected.category
             async with AsyncSessionLocal() as session:
                 self.manage_client_note = (
                     await services.get_product_client_note(session, selected_id)
@@ -197,6 +256,9 @@ class AdminState(rx.State):
             self.manage_warranty = (
                 str(selected.warranty_days) if selected is not None else "0"
             )
+            self.manage_category_choice = (
+                selected.category if selected is not None else ""
+            )
             async with AsyncSessionLocal() as session:
                 self.manage_client_note = (
                     await services.get_product_client_note(session, selected_id)
@@ -207,6 +269,7 @@ class AdminState(rx.State):
             self.manage_name = ""
             self.manage_price = ""
             self.manage_warranty = "0"
+            self.manage_category_choice = ""
             self.manage_client_note = ""
         self.orders = [
             OrderRow(
@@ -245,17 +308,30 @@ class AdminState(rx.State):
     def set_new_category(self, v: str) -> None:
         self.new_category = v
 
+    def set_new_category_choice(self, v: str) -> None:
+        self.new_category_choice = v
+
+    def set_manage_category_choice(self, v: str) -> None:
+        self.manage_category_choice = v
+
+    def set_manage_category_new(self, v: str) -> None:
+        self.manage_category_new = v
+
     def set_new_warranty(self, v: str) -> None:
         self.new_warranty = v
 
     async def add_product(self) -> None:
         if not self.authed:
             return
+        # A typed new category wins over the dropdown pick.
+        category = (
+            self.new_category.strip() or self.new_category_choice.strip()
+        )
         try:
             payload = ProductCreate(
                 name=self.new_name.strip(),
                 price=Decimal(self.new_price or "0"),
-                category=self.new_category.strip() or "general",
+                category=category or "general",
                 warranty_days=int(self.new_warranty or "0"),
             )
         except (InvalidOperation, ValueError) as exc:
@@ -264,8 +340,12 @@ class AdminState(rx.State):
 
         async with AsyncSessionLocal() as session:
             product = await services.create_product(session, payload)
-        self.form_message = f"✅ Added '{product.name}' (#{product.id})."
+        self.form_message = (
+            f"✅ Added '{product.name}' (#{product.id}) "
+            f"in category '{product.category}'."
+        )
         self.new_name = self.new_price = self.new_category = ""
+        self.new_category_choice = ""
         self.new_warranty = "0"
         await self.load_all()
 
@@ -385,7 +465,13 @@ class AdminState(rx.State):
     # ----------------------------------------------------------------- #
     # Bulk inventory upload (one item per line)
     # ----------------------------------------------------------------- #
-    def set_product(self, value: str) -> None:
+    async def set_product(self, value: str) -> None:
+        """Switch selected product and reload EVERY per-product field.
+
+        The delivery note is loaded fresh from the DB here — otherwise the
+        previous product's note lingers in the textarea and gets saved onto
+        the newly selected product (1 product = 1 note must hold).
+        """
         self.selected_product = value
         selected_id = int(value.split(" — ", 1)[0])
         selected = next((p for p in self.products if p.id == selected_id), None)
@@ -394,6 +480,15 @@ class AdminState(rx.State):
         self.manage_warranty = (
             str(selected.warranty_days) if selected is not None else "0"
         )
+        self.manage_category_choice = (
+            selected.category if selected is not None else ""
+        )
+        self.manage_category_new = ""
+        async with AsyncSessionLocal() as session:
+            self.manage_client_note = (
+                await services.get_product_client_note(session, selected_id)
+                or ""
+            )
 
     def set_manage_price(self, value: str) -> None:
         self.manage_price = value
@@ -537,6 +632,36 @@ class AdminState(rx.State):
         )
         await self.load_all()
 
+    async def update_selected_category(self) -> None:
+        if not self.authed:
+            return
+        product_id = self._selected_product_id()
+        if product_id <= 0:
+            self.manage_message = "⚠ Select a product first."
+            return
+
+        # A typed new category wins over the dropdown pick.
+        category = (
+            self.manage_category_new.strip()
+            or self.manage_category_choice.strip()
+        )
+        if not category:
+            self.manage_message = (
+                "⚠ Pick an existing category or type a new one."
+            )
+            return
+
+        async with AsyncSessionLocal() as session:
+            await services.update_product_category(
+                session, product_id, category
+            )
+        self.manage_message = (
+            f"✅ Moved product #{product_id} to category '{category}'."
+        )
+        self.manage_category_new = ""
+        self.manage_category_choice = category
+        await self.load_all()
+
     async def save_client_note(self) -> None:
         if not self.authed:
             return
@@ -621,127 +746,206 @@ class AdminState(rx.State):
 # --------------------------------------------------------------------------- #
 # UI components
 # --------------------------------------------------------------------------- #
-def stat_card(label: str, value, accent: str = "gray") -> rx.Component:
+
+
+# --------------------------------------------------------------------------- #
+# UI building blocks
+# --------------------------------------------------------------------------- #
+def section_message(msg) -> rx.Component:
+    """Inline feedback callout — hidden while the message is empty."""
+    return rx.cond(
+        msg != "",
+        rx.callout(msg, icon="info", size="1", variant="surface", width="100%"),
+    )
+
+
+def card_header(icon_name: str, title: str, subtitle: str = "") -> rx.Component:
+    rows = [
+        rx.hstack(
+            rx.icon(icon_name, size=18, color=rx.color("accent", 9)),
+            rx.heading(title, size="4"),
+            spacing="2",
+            align="center",
+        )
+    ]
+    if subtitle:
+        rows.append(rx.text(subtitle, size="1", color_scheme="gray"))
+    return rx.vstack(*rows, spacing="1", width="100%")
+
+
+def search_box(placeholder: str, value, on_change) -> rx.Component:
+    return rx.input(
+        rx.input.slot(rx.icon("search", size=14)),
+        placeholder=placeholder,
+        value=value,
+        on_change=on_change,
+        width="16em",
+        size="2",
+        variant="surface",
+    )
+
+
+def stat_card(icon_name: str, label: str, value, accent: str) -> rx.Component:
     return rx.card(
-        rx.vstack(
-            rx.text(label, size="1", color_scheme="gray"),
-            rx.heading(value, size="6", color_scheme=accent),
-            spacing="1",
+        rx.hstack(
+            rx.box(
+                rx.icon(icon_name, size=20, color=rx.color(accent, 9)),
+                background_color=rx.color(accent, 3),
+                border_radius="10px",
+                padding="0.55em",
+            ),
+            rx.vstack(
+                rx.text(label, size="1", color_scheme="gray", weight="medium"),
+                rx.heading(value, size="6"),
+                spacing="0",
+            ),
+            spacing="3",
+            align="center",
         ),
-        flex="1",
+        size="2",
     )
 
 
 def kpi_row() -> rx.Component:
-    return rx.hstack(
-        stat_card("Users", AdminState.stat_users, "blue"),
-        stat_card("Orders", AdminState.stat_orders, "purple"),
-        stat_card("Paid orders", AdminState.stat_paid, "green"),
-        stat_card("Revenue ($)", AdminState.stat_revenue, "green"),
-        stat_card("Stock left", AdminState.stat_stock, "orange"),
+    return rx.grid(
+        stat_card("users", "Users", AdminState.stat_users, "blue"),
+        stat_card("shopping-cart", "Orders", AdminState.stat_orders, "violet"),
+        stat_card("badge-check", "Paid orders", AdminState.stat_paid, "green"),
+        stat_card("dollar-sign", "Revenue", AdminState.stat_revenue, "green"),
+        stat_card("boxes", "Stock left", AdminState.stat_stock, "amber"),
+        columns=rx.breakpoints(initial="2", sm="3", lg="5"),
         spacing="3",
         width="100%",
     )
 
 
-def add_product_form() -> rx.Component:
-    return rx.vstack(
-        rx.heading("Add Product", size="5"),
-        rx.hstack(
-            rx.input(
-                placeholder="Name",
-                value=AdminState.new_name,
-                on_change=AdminState.set_new_name,
-            ),
-            rx.input(
-                placeholder="Price (USD)",
-                type="number",
-                value=AdminState.new_price,
-                on_change=AdminState.set_new_price,
-                width="8em",
-            ),
-            rx.input(
-                placeholder="Category",
-                value=AdminState.new_category,
-                on_change=AdminState.set_new_category,
-            ),
-            rx.input(
-                placeholder="Warranty days",
-                type="number",
-                value=AdminState.new_warranty,
-                on_change=AdminState.set_new_warranty,
-                width="8em",
-            ),
-            rx.button("Add", on_click=AdminState.add_product),
-            spacing="2",
-            wrap="wrap",
-            align="center",
+# --------------------------------------------------------------------------- #
+# Products tab
+# --------------------------------------------------------------------------- #
+def category_picker(
+    choice_value, on_choice, new_value, on_new, new_placeholder: str
+) -> rx.Component:
+    """Pick an existing category OR type a new one (typed name wins)."""
+    return rx.hstack(
+        rx.select(
+            AdminState.categories,
+            value=choice_value,
+            on_change=on_choice,
+            placeholder="Existing category…",
+            width="14em",
         ),
-        rx.text(AdminState.form_message, color_scheme="gray"),
-        width="100%",
+        rx.text("or", size="1", color_scheme="gray"),
+        rx.input(
+            placeholder=new_placeholder,
+            value=new_value,
+            on_change=on_new,
+            width="14em",
+        ),
         spacing="2",
+        align="center",
+        wrap="wrap",
     )
 
 
-def bot_settings_card() -> rx.Component:
-    return rx.vstack(
-        rx.heading("Bot Settings", size="5"),
-        rx.hstack(
-            rx.text("Show exact stock count in bot product list"),
-            rx.switch(
-                checked=AdminState.bot_show_stock,
-                on_change=AdminState.set_bot_show_stock_toggle,
+def add_product_card() -> rx.Component:
+    return rx.card(
+        rx.vstack(
+            card_header(
+                "package-plus",
+                "Add Product",
+                "Pick an existing category or type a new one to create it.",
             ),
-            spacing="3",
-            align="center",
-        ),
-        width="100%",
-        spacing="2",
-    )
-
-
-def announcement_card() -> rx.Component:
-    return rx.vstack(
-        rx.heading("Announcement", size="5"),
-        rx.text(
-            "Broadcast a message to all active Telegram clients.",
-            color_scheme="gray",
-        ),
-        rx.text_area(
-            placeholder="Write announcement for clients...",
-            value=AdminState.announcement_text,
-            on_change=AdminState.set_announcement_text,
+            rx.grid(
+                rx.vstack(
+                    rx.text("Name", size="1", weight="medium"),
+                    rx.input(
+                        placeholder="e.g. Netflix Premium 1 Month",
+                        value=AdminState.new_name,
+                        on_change=AdminState.set_new_name,
+                        width="100%",
+                    ),
+                    spacing="1",
+                ),
+                rx.vstack(
+                    rx.text("Price (USD)", size="1", weight="medium"),
+                    rx.input(
+                        placeholder="0.00",
+                        type="number",
+                        value=AdminState.new_price,
+                        on_change=AdminState.set_new_price,
+                        width="100%",
+                    ),
+                    spacing="1",
+                ),
+                rx.vstack(
+                    rx.text("Warranty (days)", size="1", weight="medium"),
+                    rx.input(
+                        placeholder="0",
+                        type="number",
+                        value=AdminState.new_warranty,
+                        on_change=AdminState.set_new_warranty,
+                        width="100%",
+                    ),
+                    spacing="1",
+                ),
+                columns=rx.breakpoints(initial="1", sm="3"),
+                spacing="3",
+                width="100%",
+            ),
+            rx.vstack(
+                rx.text("Category", size="1", weight="medium"),
+                category_picker(
+                    AdminState.new_category_choice,
+                    AdminState.set_new_category_choice,
+                    AdminState.new_category,
+                    AdminState.set_new_category,
+                    "new category name",
+                ),
+                spacing="1",
+                width="100%",
+            ),
+            rx.button(
+                rx.icon("plus", size=16),
+                "Add Product",
+                on_click=AdminState.add_product,
+                size="2",
+            ),
+            section_message(AdminState.form_message),
+            spacing="4",
             width="100%",
-            min_height="8em",
         ),
-        rx.button(
-            "Publish Announcement",
-            color_scheme="blue",
-            on_click=AdminState.publish_announcement,
-        ),
-        rx.text(AdminState.announcement_message),
+        size="3",
         width="100%",
-        spacing="2",
     )
 
 
 def _product_row(p: ProductRow) -> rx.Component:
     return rx.table.row(
-        rx.table.cell(p.id),
-        rx.table.cell(p.name),
+        rx.table.cell(rx.text(p.id, color_scheme="gray")),
+        rx.table.cell(rx.text(p.name, weight="medium")),
         rx.table.cell("$" + p.price),
-        rx.table.cell(p.category),
-        rx.table.cell(rx.badge(p.available, color_scheme="orange")),
-        rx.table.cell(rx.badge(p.sold, color_scheme="green")),
+        rx.table.cell(rx.badge(p.category, variant="surface")),
+        rx.table.cell(
+            rx.badge(
+                p.available,
+                color_scheme=rx.cond(p.available > 0, "green", "red"),
+                variant="soft",
+            )
+        ),
+        rx.table.cell(rx.badge(p.sold, color_scheme="blue", variant="soft")),
         rx.table.cell("$" + p.revenue),
         rx.table.cell(
             rx.switch(
                 checked=p.is_active,
-                on_change=lambda checked: AdminState.toggle_product(p.id, checked),
+                on_change=lambda checked: AdminState.toggle_product(
+                    p.id, checked
+                ),
+                size="1",
             )
         ),
         rx.table.cell(
             rx.button(
+                rx.icon("eraser", size=14),
                 "Clear stock",
                 size="1",
                 color_scheme="red",
@@ -749,99 +953,402 @@ def _product_row(p: ProductRow) -> rx.Component:
                 on_click=lambda: AdminState.clear_stock(p.id),
             )
         ),
+        align="center",
     )
 
 
-def products_table() -> rx.Component:
-    return rx.vstack(
-        rx.heading("Products & Stock", size="5"),
-        rx.text(
-            "Available = ready to sell (before buy) · Sold = allocated to "
-            "orders (after buy).",
-            size="1",
-            color_scheme="gray",
-        ),
-        rx.table.root(
-            rx.table.header(
-                rx.table.row(
-                    rx.table.column_header_cell("ID"),
-                    rx.table.column_header_cell("Name"),
-                    rx.table.column_header_cell("Price"),
-                    rx.table.column_header_cell("Category"),
-                    rx.table.column_header_cell("Available"),
-                    rx.table.column_header_cell("Sold"),
-                    rx.table.column_header_cell("Revenue"),
-                    rx.table.column_header_cell("Active"),
-                    rx.table.column_header_cell("Actions"),
-                )
+def products_table_card() -> rx.Component:
+    return rx.card(
+        rx.vstack(
+            rx.hstack(
+                card_header(
+                    "boxes",
+                    "Products & Stock",
+                    "Available = ready to sell · Sold = delivered to orders.",
+                ),
+                rx.spacer(),
+                search_box(
+                    "Search products…",
+                    AdminState.product_search,
+                    AdminState.set_product_search,
+                ),
+                width="100%",
+                align="start",
+                wrap="wrap",
             ),
-            rx.table.body(rx.foreach(AdminState.products, _product_row)),
+            rx.box(
+                rx.table.root(
+                    rx.table.header(
+                        rx.table.row(
+                            rx.table.column_header_cell("ID"),
+                            rx.table.column_header_cell("Name"),
+                            rx.table.column_header_cell("Price"),
+                            rx.table.column_header_cell("Category"),
+                            rx.table.column_header_cell("Available"),
+                            rx.table.column_header_cell("Sold"),
+                            rx.table.column_header_cell("Revenue"),
+                            rx.table.column_header_cell("Active"),
+                            rx.table.column_header_cell(""),
+                        )
+                    ),
+                    rx.table.body(
+                        rx.foreach(AdminState.filtered_products, _product_row)
+                    ),
+                    variant="surface",
+                    size="2",
+                    width="100%",
+                ),
+                overflow_x="auto",
+                width="100%",
+            ),
+            spacing="4",
             width="100%",
         ),
+        size="3",
         width="100%",
-        spacing="2",
     )
 
 
+def field_row(label: str, control, button) -> rx.Component:
+    return rx.vstack(
+        rx.text(label, size="1", weight="medium"),
+        rx.hstack(control, button, spacing="2", align="center", wrap="wrap"),
+        spacing="1",
+        width="100%",
+    )
+
+
+def manage_product_card() -> rx.Component:
+    return rx.card(
+        rx.vstack(
+            card_header(
+                "settings-2",
+                "Manage Selected Product",
+                "Every field below belongs ONLY to the selected product.",
+            ),
+            rx.select(
+                AdminState.product_options,
+                value=AdminState.selected_product,
+                on_change=AdminState.set_product,
+                placeholder="Select product…",
+                width="22em",
+            ),
+            rx.grid(
+                field_row(
+                    "Rename",
+                    rx.input(
+                        placeholder="New product name",
+                        value=AdminState.manage_name,
+                        on_change=AdminState.set_manage_name,
+                        width="16em",
+                    ),
+                    rx.button(
+                        "Rename",
+                        on_click=AdminState.rename_selected_product,
+                        variant="soft",
+                        size="2",
+                    ),
+                ),
+                field_row(
+                    "Price (USD)",
+                    rx.input(
+                        placeholder="0.00",
+                        type="number",
+                        value=AdminState.manage_price,
+                        on_change=AdminState.set_manage_price,
+                        width="10em",
+                    ),
+                    rx.button(
+                        "Update Price",
+                        on_click=AdminState.update_selected_price,
+                        variant="soft",
+                        size="2",
+                    ),
+                ),
+                field_row(
+                    "Warranty (days, 0 = none)",
+                    rx.input(
+                        placeholder="0",
+                        type="number",
+                        value=AdminState.manage_warranty,
+                        on_change=AdminState.set_manage_warranty,
+                        width="10em",
+                    ),
+                    rx.button(
+                        "Update Warranty",
+                        on_click=AdminState.update_selected_warranty,
+                        variant="soft",
+                        size="2",
+                    ),
+                ),
+                field_row(
+                    "Category (pick existing or type new)",
+                    category_picker(
+                        AdminState.manage_category_choice,
+                        AdminState.set_manage_category_choice,
+                        AdminState.manage_category_new,
+                        AdminState.set_manage_category_new,
+                        "new category name",
+                    ),
+                    rx.button(
+                        "Update Category",
+                        on_click=AdminState.update_selected_category,
+                        variant="soft",
+                        size="2",
+                    ),
+                ),
+                columns=rx.breakpoints(initial="1", md="2"),
+                spacing="4",
+                width="100%",
+            ),
+            rx.divider(),
+            rx.vstack(
+                rx.hstack(
+                    rx.icon("sticky-note", size=16, color=rx.color("amber", 9)),
+                    rx.text(
+                        "Delivery note — sent to the buyer with THIS product "
+                        "only. Each product keeps its own note.",
+                        size="1",
+                        weight="medium",
+                    ),
+                    spacing="2",
+                    align="center",
+                ),
+                rx.text_area(
+                    placeholder="Optional note (leave blank for no note)",
+                    value=AdminState.manage_client_note,
+                    on_change=AdminState.set_manage_client_note,
+                    width="100%",
+                    min_height="6em",
+                ),
+                rx.button(
+                    rx.icon("save", size=16),
+                    "Save Note for This Product",
+                    on_click=AdminState.save_client_note,
+                    size="2",
+                ),
+                spacing="2",
+                width="100%",
+            ),
+            rx.divider(),
+            rx.vstack(
+                rx.hstack(
+                    rx.icon("list-plus", size=16, color=rx.color("green", 9)),
+                    rx.text(
+                        "Add stock — one credential/key per line.",
+                        size="1",
+                        weight="medium",
+                    ),
+                    spacing="2",
+                    align="center",
+                ),
+                rx.text_area(
+                    placeholder="account1|password1\naccount2|password2",
+                    value=AdminState.manage_stock_lines,
+                    on_change=AdminState.set_manage_stock_lines,
+                    width="100%",
+                    min_height="8em",
+                ),
+                rx.hstack(
+                    rx.button(
+                        rx.icon("plus", size=16),
+                        "Add Stock",
+                        color_scheme="green",
+                        on_click=AdminState.add_stock_to_selected,
+                        size="2",
+                    ),
+                    rx.spacer(),
+                    rx.button(
+                        rx.icon("trash-2", size=16),
+                        "Delete Product",
+                        color_scheme="red",
+                        variant="soft",
+                        on_click=AdminState.delete_selected_product,
+                        size="2",
+                    ),
+                    width="100%",
+                ),
+                spacing="2",
+                width="100%",
+            ),
+            section_message(AdminState.manage_message),
+            spacing="4",
+            width="100%",
+        ),
+        size="3",
+        width="100%",
+    )
+
+
+def _bulk_upload_body() -> rx.Component:
+    return rx.vstack(
+        rx.select(
+            AdminState.product_options,
+            value=AdminState.selected_product,
+            on_change=AdminState.set_product,
+            placeholder="Select product…",
+            width="22em",
+        ),
+        rx.upload(
+            rx.vstack(
+                rx.icon("file-up", size=22, color=rx.color("accent", 9)),
+                rx.text("Drop a .txt file here or click to browse", size="2"),
+                spacing="2",
+                align="center",
+            ),
+            id="bulk_inventory",
+            max_files=5,
+            border=f"1.5px dashed {rx.color('accent', 8)}",
+            border_radius="12px",
+            padding="2em",
+            width="100%",
+        ),
+        rx.hstack(rx.foreach(rx.selected_files("bulk_inventory"), rx.text)),
+        rx.button(
+            rx.icon("upload", size=16),
+            "Bulk Upload",
+            on_click=AdminState.handle_upload(
+                rx.upload_files(upload_id="bulk_inventory")
+            ),
+            size="2",
+        ),
+        section_message(AdminState.upload_message),
+        width="100%",
+        spacing="3",
+    )
+
+
+def bulk_upload_card_v2() -> rx.Component:
+    return rx.card(
+        rx.vstack(
+            card_header(
+                "upload",
+                "Bulk Upload Inventory",
+                "Pick a product, then upload a .txt file with one item "
+                "(credential / key) per line.",
+            ),
+            _bulk_upload_body(),
+            spacing="4",
+            width="100%",
+        ),
+        size="3",
+        width="100%",
+    )
+
+
+def products_tab() -> rx.Component:
+    return rx.vstack(
+        add_product_card(),
+        products_table_card(),
+        manage_product_card(),
+        bulk_upload_card_v2(),
+        spacing="4",
+        width="100%",
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Orders tab
+# --------------------------------------------------------------------------- #
 def _order_row(o: OrderRow) -> rx.Component:
     return rx.table.row(
-        rx.table.cell(o.id),
-        rx.table.cell(o.buyer),
+        rx.table.cell(rx.text(o.id, color_scheme="gray")),
+        rx.table.cell(rx.text(o.buyer, weight="medium")),
         rx.table.cell("$" + o.total_price),
-        rx.table.cell(rx.badge(o.status)),
-        rx.table.cell(o.created_at),
-    )
-
-
-def orders_table() -> rx.Component:
-    return rx.vstack(
-        rx.hstack(
-            rx.heading("Orders", size="5"),
-            rx.spacer(),
-            rx.button(
-                "Clear Orders Now",
-                color_scheme="red",
+        rx.table.cell(
+            rx.badge(
+                o.status,
+                color_scheme=rx.match(
+                    o.status,
+                    ("paid", "green"),
+                    ("delivered", "green"),
+                    ("pending", "amber"),
+                    ("canceled", "red"),
+                    "gray",
+                ),
                 variant="soft",
-                on_click=AdminState.clear_orders_now,
-            ),
-            width="100%",
-            align="center",
+            )
         ),
-        rx.text(AdminState.orders_message),
-        rx.table.root(
-            rx.table.header(
-                rx.table.row(
-                    rx.table.column_header_cell("ID"),
-                    rx.table.column_header_cell("Buyer"),
-                    rx.table.column_header_cell("Total"),
-                    rx.table.column_header_cell("Status"),
-                    rx.table.column_header_cell("Created"),
-                )
-            ),
-            rx.table.body(rx.foreach(AdminState.orders, _order_row)),
-            width="100%",
-        ),
-        width="100%",
-        spacing="2",
+        rx.table.cell(rx.text(o.created_at, color_scheme="gray", size="1")),
+        align="center",
     )
 
 
+def orders_tab() -> rx.Component:
+    return rx.card(
+        rx.vstack(
+            rx.hstack(
+                card_header("shopping-cart", "Orders", "Latest 100 orders."),
+                rx.spacer(),
+                search_box(
+                    "Search orders…",
+                    AdminState.order_search,
+                    AdminState.set_order_search,
+                ),
+                rx.button(
+                    rx.icon("trash-2", size=14),
+                    "Clear Orders",
+                    color_scheme="red",
+                    variant="soft",
+                    size="2",
+                    on_click=AdminState.clear_orders_now,
+                ),
+                width="100%",
+                align="start",
+                wrap="wrap",
+                spacing="3",
+            ),
+            section_message(AdminState.orders_message),
+            rx.box(
+                rx.table.root(
+                    rx.table.header(
+                        rx.table.row(
+                            rx.table.column_header_cell("ID"),
+                            rx.table.column_header_cell("Buyer"),
+                            rx.table.column_header_cell("Total"),
+                            rx.table.column_header_cell("Status"),
+                            rx.table.column_header_cell("Created"),
+                        )
+                    ),
+                    rx.table.body(
+                        rx.foreach(AdminState.filtered_orders, _order_row)
+                    ),
+                    variant="surface",
+                    size="2",
+                    width="100%",
+                ),
+                overflow_x="auto",
+                width="100%",
+            ),
+            spacing="4",
+            width="100%",
+        ),
+        size="3",
+        width="100%",
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Users tab
+# --------------------------------------------------------------------------- #
 def _user_row(u: UserRow) -> rx.Component:
     return rx.table.row(
-        rx.table.cell(u.id),
+        rx.table.cell(rx.text(u.id, color_scheme="gray")),
         rx.table.cell(u.telegram_id),
-        rx.table.cell(u.username),
+        rx.table.cell(rx.text(u.username, weight="medium")),
         rx.table.cell("$" + u.balance),
         rx.table.cell(
             rx.badge(
                 rx.cond(u.is_blocked, "Blocked", "Allowed"),
                 color_scheme=rx.cond(u.is_blocked, "red", "green"),
+                variant="soft",
             )
         ),
         rx.table.cell(
             rx.switch(
                 checked=u.is_active,
                 on_change=lambda checked: AdminState.toggle_user(u.id, checked),
+                size="1",
             )
         ),
         rx.table.cell(
@@ -851,14 +1358,13 @@ def _user_row(u: UserRow) -> rx.Component:
                     "Unblock",
                     size="1",
                     color_scheme="green",
-                    variant="solid",
                     on_click=lambda: AdminState.unblock_user(u.id),
                 ),
                 rx.button(
                     "Block Forever",
                     size="1",
                     color_scheme="red",
-                    variant="solid",
+                    variant="soft",
                     on_click=lambda: AdminState.block_user_forever(u.id),
                 ),
             )
@@ -866,250 +1372,290 @@ def _user_row(u: UserRow) -> rx.Component:
         rx.table.cell(
             rx.hstack(
                 rx.button(
-                    "+",
+                    rx.icon("plus", size=14),
                     size="1",
                     color_scheme="green",
+                    variant="soft",
                     on_click=lambda: AdminState.credit_user_wallet(u.id),
                 ),
                 rx.button(
-                    "-",
+                    rx.icon("minus", size=14),
                     size="1",
                     color_scheme="orange",
+                    variant="soft",
                     on_click=lambda: AdminState.debit_user_wallet(u.id),
                 ),
-                spacing="2",
+                spacing="1",
             )
         ),
+        align="center",
     )
 
 
-def users_table() -> rx.Component:
-    return rx.vstack(
-        rx.heading("Users", size="5"),
-        rx.hstack(
-            rx.text("Wallet adjust amount (USD):"),
-            rx.input(
-                placeholder="e.g. 5.00",
-                value=AdminState.user_adjust_amount,
-                on_change=AdminState.set_user_adjust_amount,
-                width="10em",
+def users_tab() -> rx.Component:
+    return rx.card(
+        rx.vstack(
+            rx.hstack(
+                card_header(
+                    "users",
+                    "Users",
+                    "Toggle Active to suspend; +/- adjusts wallet by the "
+                    "amount below.",
+                ),
+                rx.spacer(),
+                search_box(
+                    "Search users…",
+                    AdminState.user_search,
+                    AdminState.set_user_search,
+                ),
+                width="100%",
+                align="start",
+                wrap="wrap",
             ),
+            rx.hstack(
+                rx.text("Wallet adjust amount (USD):", size="2"),
+                rx.input(
+                    placeholder="e.g. 5.00",
+                    type="number",
+                    value=AdminState.user_adjust_amount,
+                    on_change=AdminState.set_user_adjust_amount,
+                    width="9em",
+                ),
+                spacing="2",
+                align="center",
+            ),
+            section_message(AdminState.users_message),
+            rx.box(
+                rx.table.root(
+                    rx.table.header(
+                        rx.table.row(
+                            rx.table.column_header_cell("ID"),
+                            rx.table.column_header_cell("Telegram ID"),
+                            rx.table.column_header_cell("Username"),
+                            rx.table.column_header_cell("Wallet"),
+                            rx.table.column_header_cell("Status"),
+                            rx.table.column_header_cell("Active"),
+                            rx.table.column_header_cell("Block"),
+                            rx.table.column_header_cell("Wallet +/-"),
+                        )
+                    ),
+                    rx.table.body(
+                        rx.foreach(AdminState.filtered_users, _user_row)
+                    ),
+                    variant="surface",
+                    size="2",
+                    width="100%",
+                ),
+                overflow_x="auto",
+                width="100%",
+            ),
+            spacing="4",
+            width="100%",
+        ),
+        size="3",
+        width="100%",
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Marketing / settings tab
+# --------------------------------------------------------------------------- #
+def marketing_tab() -> rx.Component:
+    return rx.vstack(
+        rx.card(
+            rx.vstack(
+                card_header(
+                    "megaphone",
+                    "Announcement",
+                    "Broadcast a message to all active Telegram clients.",
+                ),
+                rx.text_area(
+                    placeholder="Write announcement for clients…",
+                    value=AdminState.announcement_text,
+                    on_change=AdminState.set_announcement_text,
+                    width="100%",
+                    min_height="8em",
+                ),
+                rx.button(
+                    rx.icon("send", size=16),
+                    "Publish Announcement",
+                    on_click=AdminState.publish_announcement,
+                    size="2",
+                ),
+                section_message(AdminState.announcement_message),
+                spacing="3",
+                width="100%",
+            ),
+            size="3",
+            width="100%",
+        ),
+        rx.card(
+            rx.vstack(
+                card_header("bot", "Bot Settings"),
+                rx.hstack(
+                    rx.switch(
+                        checked=AdminState.bot_show_stock,
+                        on_change=AdminState.set_bot_show_stock_toggle,
+                    ),
+                    rx.text(
+                        "Show exact stock count in the bot's product list",
+                        size="2",
+                    ),
+                    spacing="3",
+                    align="center",
+                ),
+                spacing="3",
+                width="100%",
+            ),
+            size="3",
+            width="100%",
+        ),
+        spacing="4",
+        width="100%",
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Page shell
+# --------------------------------------------------------------------------- #
+def _tab_trigger(icon_name: str, label: str, value: str) -> rx.Component:
+    return rx.tabs.trigger(
+        rx.hstack(
+            rx.icon(icon_name, size=15),
+            rx.text(label),
             spacing="2",
             align="center",
         ),
-        rx.text(AdminState.users_message),
-        rx.table.root(
-            rx.table.header(
-                rx.table.row(
-                    rx.table.column_header_cell("ID"),
-                    rx.table.column_header_cell("Telegram ID"),
-                    rx.table.column_header_cell("Username"),
-                    rx.table.column_header_cell("Wallet"),
-                    rx.table.column_header_cell("Security Status"),
-                    rx.table.column_header_cell("Active (toggle to suspend)"),
-                    rx.table.column_header_cell("Permanent Block"),
-                    rx.table.column_header_cell("Wallet +/-"),
-                )
-            ),
-            rx.table.body(rx.foreach(AdminState.users, _user_row)),
-            width="100%",
-        ),
-        width="100%",
-        spacing="2",
+        value=value,
     )
 
 
-def bulk_upload_card() -> rx.Component:
-    return rx.vstack(
-        rx.heading("Bulk Upload Inventory", size="5"),
-        rx.text(
-            "Pick a product, then upload a .txt file with one item "
-            "(credential / key) per line.",
-            color_scheme="gray",
-        ),
-        rx.select(
-            AdminState.product_options,
-            value=AdminState.selected_product,
-            on_change=AdminState.set_product,
-            placeholder="Select product…",
-            width="20em",
-        ),
-        rx.upload(
-            rx.text("📄 Drop a .txt file here or click to browse"),
-            id="bulk_inventory",
-            max_files=5,
-            border="1px dashed var(--accent-8)",
-            padding="2em",
-            width="100%",
-        ),
-        rx.hstack(rx.foreach(rx.selected_files("bulk_inventory"), rx.text)),
-        rx.button(
-            "Bulk Upload",
-            on_click=AdminState.handle_upload(
-                rx.upload_files(upload_id="bulk_inventory")
-            ),
-        ),
-        rx.text(AdminState.upload_message),
-        width="100%",
-        spacing="3",
-    )
-
-
-def manage_selected_product_card() -> rx.Component:
-    return rx.vstack(
-        rx.heading("Manage Current Product", size="5"),
-        rx.text(
-            "Rename, add stock to current product, or delete product "
-            "(delete is immediate).",
-            color_scheme="gray",
-        ),
-        rx.select(
-            AdminState.product_options,
-            value=AdminState.selected_product,
-            on_change=AdminState.set_product,
-            placeholder="Select product…",
-            width="20em",
-        ),
+def topbar() -> rx.Component:
+    return rx.box(
         rx.hstack(
-            rx.input(
-                placeholder="New product name",
-                value=AdminState.manage_name,
-                on_change=AdminState.set_manage_name,
-                width="24em",
+            rx.hstack(
+                rx.icon("store", size=22, color=rx.color("accent", 9)),
+                rx.heading("Bondom Admin", size="5"),
+                spacing="2",
+                align="center",
             ),
-            rx.button("Rename", on_click=AdminState.rename_selected_product),
-            spacing="2",
-            wrap="wrap",
-        ),
-        rx.hstack(
-            rx.input(
-                placeholder="Price (USD)",
-                type="number",
-                value=AdminState.manage_price,
-                on_change=AdminState.set_manage_price,
-                width="12em",
-            ),
-            rx.button("Update Price", on_click=AdminState.update_selected_price),
-            spacing="2",
-            wrap="wrap",
-        ),
-        rx.hstack(
-            rx.input(
-                placeholder="Warranty days (0 = no warranty)",
-                type="number",
-                value=AdminState.manage_warranty,
-                on_change=AdminState.set_manage_warranty,
-                width="18em",
-            ),
+            rx.spacer(),
             rx.button(
-                "Update Warranty",
-                on_click=AdminState.update_selected_warranty,
-            ),
-            spacing="2",
-            wrap="wrap",
-        ),
-        rx.text_area(
-            placeholder=(
-                "Optional note for client delivery (leave blank for no note)"
-            ),
-            value=AdminState.manage_client_note,
-            on_change=AdminState.set_manage_client_note,
-            width="100%",
-            min_height="6em",
-        ),
-        rx.button("Save Client Note", on_click=AdminState.save_client_note),
-        rx.text_area(
-            placeholder=(
-                "Add stock lines here (one credential/key per line), "
-                "then click Add Stock"
-            ),
-            value=AdminState.manage_stock_lines,
-            on_change=AdminState.set_manage_stock_lines,
-            width="100%",
-            min_height="10em",
-        ),
-        rx.hstack(
-            rx.button(
-                "Add Stock",
-                color_scheme="green",
-                on_click=AdminState.add_stock_to_selected,
-            ),
-            rx.button(
-                "Delete Product",
-                color_scheme="red",
+                rx.icon("refresh-cw", size=15),
+                rx.text("Refresh", display=rx.breakpoints(initial="none", sm="block")),
+                on_click=AdminState.load_all,
                 variant="soft",
-                on_click=AdminState.delete_selected_product,
+                size="2",
             ),
-            spacing="2",
-            wrap="wrap",
+            rx.button(
+                rx.icon("log-out", size=15),
+                rx.text("Sign out", display=rx.breakpoints(initial="none", sm="block")),
+                on_click=AdminState.logout,
+                variant="soft",
+                color_scheme="gray",
+                size="2",
+            ),
+            width="100%",
+            align="center",
+            spacing="3",
         ),
-        rx.text(AdminState.manage_message),
+        position="sticky",
+        top="0",
+        z_index="10",
+        backdrop_filter="blur(10px)",
+        background_color=rx.color("gray", 2),
+        border_bottom=f"1px solid {rx.color('gray', 5)}",
+        padding="0.7em 1.2em",
         width="100%",
-        spacing="3",
+    )
+
+
+def dashboard_view() -> rx.Component:
+    return rx.vstack(
+        topbar(),
+        rx.box(
+            rx.vstack(
+                kpi_row(),
+                rx.tabs.root(
+                    rx.tabs.list(
+                        _tab_trigger("boxes", "Products", "products"),
+                        _tab_trigger("shopping-cart", "Orders", "orders"),
+                        _tab_trigger("users", "Users", "users"),
+                        _tab_trigger("megaphone", "Marketing", "marketing"),
+                        size="2",
+                    ),
+                    rx.tabs.content(
+                        products_tab(), value="products", padding_top="1.2em"
+                    ),
+                    rx.tabs.content(
+                        orders_tab(), value="orders", padding_top="1.2em"
+                    ),
+                    rx.tabs.content(
+                        users_tab(), value="users", padding_top="1.2em"
+                    ),
+                    rx.tabs.content(
+                        marketing_tab(), value="marketing", padding_top="1.2em"
+                    ),
+                    default_value="products",
+                    width="100%",
+                ),
+                spacing="4",
+                width="100%",
+                padding="1.2em",
+                max_width="72rem",
+                margin_x="auto",
+            ),
+            width="100%",
+        ),
+        spacing="0",
+        width="100%",
     )
 
 
 def login_view() -> rx.Component:
     return rx.center(
-        rx.vstack(
-            rx.heading("🔐 Bondom Account — Admin", size="6"),
-            rx.input(
-                placeholder="Admin password",
-                type="password",
-                value=AdminState.password_input,
-                on_change=AdminState.set_password_input,
-                width="100%",
-            ),
-            rx.button("Sign in", on_click=AdminState.login, width="100%"),
-            rx.cond(
-                AdminState.login_message != "",
-                rx.text(AdminState.login_message, color_scheme="red"),
-            ),
-            spacing="4",
-            width="20em",
-        ),
-        height="80vh",
-    )
-
-
-def dashboard_view() -> rx.Component:
-    return rx.container(
-        rx.vstack(
-            rx.hstack(
-                rx.heading("🛍 Bondom Account — Admin", size="7"),
-                rx.spacer(),
-                rx.button("↻ Refresh", on_click=AdminState.load_all),
-                rx.button(
-                    "Sign out",
-                    on_click=AdminState.logout,
-                    variant="soft",
-                    color_scheme="gray",
+        rx.card(
+            rx.vstack(
+                rx.box(
+                    rx.icon("store", size=26, color=rx.color("accent", 9)),
+                    background_color=rx.color("accent", 3),
+                    border_radius="12px",
+                    padding="0.6em",
                 ),
-                width="100%",
+                rx.heading("Bondom Account", size="6"),
+                rx.text("Admin sign in", size="2", color_scheme="gray"),
+                rx.input(
+                    placeholder="Admin password",
+                    type="password",
+                    value=AdminState.password_input,
+                    on_change=AdminState.set_password_input,
+                    width="100%",
+                    size="3",
+                ),
+                rx.button(
+                    rx.icon("lock-open", size=16),
+                    "Sign in",
+                    on_click=AdminState.login,
+                    width="100%",
+                    size="3",
+                ),
+                rx.cond(
+                    AdminState.login_message != "",
+                    rx.callout(
+                        AdminState.login_message,
+                        icon="triangle-alert",
+                        color_scheme="red",
+                        size="1",
+                        width="100%",
+                    ),
+                ),
+                spacing="4",
+                width="20em",
                 align="center",
             ),
-            rx.divider(),
-            kpi_row(),
-            rx.divider(),
-            bot_settings_card(),
-            rx.divider(),
-            announcement_card(),
-            rx.divider(),
-            add_product_form(),
-            rx.divider(),
-            products_table(),
-            rx.divider(),
-            manage_selected_product_card(),
-            rx.divider(),
-            bulk_upload_card(),
-            rx.divider(),
-            orders_table(),
-            rx.divider(),
-            users_table(),
-            spacing="6",
-            padding_y="2em",
+            size="4",
         ),
-        size="4",
+        height="90vh",
     )
 
 
@@ -1118,4 +1664,10 @@ def index() -> rx.Component:
     return rx.cond(AdminState.authed, dashboard_view(), login_view())
 
 
-app = rx.App()
+app = rx.App(
+    theme=rx.theme(
+        accent_color="indigo",
+        gray_color="slate",
+        radius="large",
+    )
+)
