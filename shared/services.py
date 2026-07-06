@@ -792,6 +792,20 @@ async def cancel_order_and_release_inventory(
     return order
 
 
+async def list_user_orders(
+    session: AsyncSession, user_id: int, limit: int = 5
+) -> list[Order]:
+    """A customer's most recent orders (for the bot's My Orders view)."""
+    async with transaction_scope(session):
+        result = await session.scalars(
+            select(Order)
+            .where(Order.user_id == user_id)
+            .order_by(Order.created_at.desc(), Order.id.desc())
+            .limit(limit)
+        )
+        return list(result.all())
+
+
 async def list_orders(session: AsyncSession, limit: int = 200) -> list[Order]:
     """Recent orders with user preloaded (for the admin panel table)."""
     async with transaction_scope(session):

@@ -79,13 +79,14 @@ class PurchaseState(StatesGroup):
 BTN_BROWSE = "🛒 Browse Products"
 BTN_TOPUP = "💳 Top Up Wallet"
 BTN_BALANCE = "💰 My Balance"
+BTN_ORDERS = "📦 My Orders"
 
 
 def _main_menu() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text=BTN_BROWSE), KeyboardButton(text=BTN_TOPUP)],
-            [KeyboardButton(text=BTN_BALANCE)],
+            [KeyboardButton(text=BTN_BALANCE), KeyboardButton(text=BTN_ORDERS)],
         ],
         resize_keyboard=True,
     )
@@ -370,6 +371,111 @@ async def btn_browse(message: Message) -> None:
     if message.from_user is None:
         return
     await _show_products_for_user(message, message.from_user.id)
+
+
+_ORDER_STATUS_EMOJI = {
+    OrderStatus.PENDING: "⏳",
+    OrderStatus.PAID: "💰",
+    OrderStatus.DELIVERED: "✅",
+    OrderStatus.CANCELED: "❌",
+}
+
+
+async def _show_orders_for_user(message: Message, telegram_id: int) -> None:
+    async with AsyncSessionLocal() as session:
+        user = await services.get_user_by_telegram_id(session, telegram_id)
+        if user is not None and await services.is_user_blocked(session, user.id):
+            await message.answer(
+                "🚫 Your account has been permanently blocked. Contact support."
+            )
+            return
+        orders = (
+            await services.list_user_orders(session, user.id, limit=5)
+            if user is not None
+            else []
+        )
+
+    if not orders:
+        await message.answer(
+            f"You have no orders yet — tap {BTN_BROWSE} to start shopping."
+        )
+        return
+
+    lines = ["📦 <b>Your recent orders</b>", ""]
+    buttons: list[list[InlineKeyboardButton]] = []
+    for order in orders:
+        emoji = _ORDER_STATUS_EMOJI.get(order.status, "•")
+        lines.append(
+            f"{emoji} Order <b>#{order.id}</b> — ${order.total_price} — "
+            f"{order.status.value} — {order.created_at:%Y-%m-%d %H:%M}"
+        )
+        if order.status is OrderStatus.DELIVERED:
+            buttons.append(
+                [
+                    InlineKeyboardButton(
+                        text=f"📥 Resend items of order #{order.id}",
+                        callback_data=f"rsnd:{order.id}",
+                    )
+                ]
+            )
+
+    await message.answer(
+        "\n".join(lines),
+        reply_markup=(
+            InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else None
+        ),
+    )
+
+
+@router.message(Command("myorders"))
+async def cmd_my_orders(message: Message) -> None:
+    if message.from_user is None:
+        return
+    await _show_orders_for_user(message, message.from_user.id)
+
+
+@router.message(F.text == BTN_ORDERS)
+async def btn_my_orders(message: Message) -> None:
+    if message.from_user is None:
+        return
+    await _show_orders_for_user(message, message.from_user.id)
+
+
+@router.callback_query(F.data.startswith("rsnd:"))
+async def cb_resend_order(callback: CallbackQuery) -> None:
+    if callback.data is None or callback.message is None:
+        return
+    if callback.from_user is None:
+        return
+    order_id = int(callback.data.split(":", 1)[1])
+
+    async with AsyncSessionLocal() as session:
+        user = await services.get_user_by_telegram_id(
+            session, callback.from_user.id
+        )
+        try:
+            order = await services.get_order_with_items(session, order_id)
+        except services.OrderNotFoundError:
+            await callback.answer("Order not found.", show_alert=True)
+            return
+        if user is None or order.user_id != user.id:
+            await callback.answer(
+                "This order does not belong to you.", show_alert=True
+            )
+            return
+        if order.status is not OrderStatus.DELIVERED:
+            await callback.answer(
+                "Only delivered orders can be resent.", show_alert=True
+            )
+            return
+
+    await _deliver_order_to_chat(
+        callback.message.bot,
+        callback.message.chat.id,
+        order,
+        title="📥 Resent items",
+    )
+    await callback.answer("Items sent again ⬆")
 
 
 @router.message(F.text == BTN_BALANCE)
@@ -878,7 +984,12 @@ async def _deliver_order(callback: CallbackQuery, order: Order) -> None:
     await _deliver_order_to_chat(callback.message.bot, callback.message.chat.id, order)
 
 
-async def _deliver_order_to_chat(bot: Bot, chat_id: int, order: Order) -> None:
+async def _deliver_order_to_chat(
+    bot: Bot,
+    chat_id: int,
+    order: Order,
+    title: str = "✅ Payment confirmed",
+) -> None:
     """Send purchased inventory data to a chat id.
 
     Items are grouped per product so every product shows ITS OWN
@@ -920,7 +1031,7 @@ async def _deliver_order_to_chat(bot: Bot, chat_id: int, order: Order) -> None:
     body = "\n\n".join(sections)
     await bot.send_message(
         chat_id,
-        f"✅ Payment confirmed — order <b>#{order.id}</b>\n\n"
+        f"{title} — order <b>#{order.id}</b>\n\n"
         f"{body}\n\n"
         "Thank you for your purchase!"
     )
