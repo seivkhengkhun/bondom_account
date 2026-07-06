@@ -1,6 +1,10 @@
 # Secrets — never commit real tokens
 .env
 
+# Databases — production data must never live in git
+*.db
+backups/
+
 # Python
 .venv/
 __pycache__/

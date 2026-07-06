@@ -1,5 +1,23 @@
 # VPS deployment — payment fix + systemd
 
+## GOLDEN RULE: the database is sacred
+
+The production database lives OUTSIDE the repo at
+`/home/ubuntu/data/store.db` (set via `DATABASE_URL` in the VPS `.env`),
+so `git pull` / `git checkout` can never touch it. `store.db` and `*.db`
+are gitignored. Daily backups run from cron via `scripts/backup_db.py`
+into `/home/ubuntu/backups/` (14 kept).
+
+Safe update procedure (every future update):
+1. `/home/ubuntu/bondom_account/.venv/bin/python /home/ubuntu/bondom_account/scripts/backup_db.py`  ← manual backup first
+2. `cd /home/ubuntu/bondom_account && git pull`
+3. Restart services. Never run `git reset --hard`/`git clean` without a
+   fresh backup; never edit DATABASE_URL to point back inside the repo.
+
+Schema note: the app creates missing tables automatically at startup
+(`init_db`), and updates must only ever ADD tables/columns — anything
+destructive (drop/rename) needs an explicit migration plan plus backup.
+
 Run these on the VPS as `ubuntu`, one block at a time.
 
 ## 1. Pull the fix
