@@ -8,14 +8,14 @@
   </nav>
 
   <div class="sms-order-wrap">
-    {# ---- status timeline ---- #}
-    <ol class="sms-timeline" aria-label="Status">
-      <li class="done"><span class="tl-dot"><svg class="ic sm" aria-hidden="true"><use href="#i-check"/></svg></span>Number rented</li>
+    {# ---------- delivery stepper ---------- #}
+    <ol class="sms-timeline" aria-label="SMS delivery status">
+      <li class="done"><span class="tl-dot"><svg class="ic sm" aria-hidden="true"><use href="#i-check"/></svg></span>Requested</li>
       <li class="{% if o.status.value in ('completed','refunded') %}done{% elif o.status.value == 'waiting_sms' %}active{% endif %}">
         <span class="tl-dot">2</span>Waiting for SMS</li>
-      <li class="{% if o.status.value == 'completed' %}done{% elif o.status.value == 'refunded' %}cancel{% endif %}">
-        <span class="tl-dot">{% if o.status.value == 'refunded' %}↺{% else %}3{% endif %}</span>
-        {% if o.status.value == 'refunded' %}Refunded{% else %}Code received{% endif %}</li>
+      <li class="{% if o.status.value == 'completed' %}done{% elif o.status.value in ('refunded','failed') %}cancel{% endif %}">
+        <span class="tl-dot">{% if o.status.value in ('refunded','failed') %}↺{% else %}3{% endif %}</span>
+        {% if o.status.value in ('refunded','failed') %}Refunded{% else %}Code received{% endif %}</li>
     </ol>
 
     <div class="card sms-order-card">
@@ -36,6 +36,7 @@
       <p class="hint">Enter this number on
         {{ "Facebook" if o.category == "facebook" else "Instagram" }} and request the code.</p>
 
+      {# ---------- dynamic status region ---------- #}
       <div id="otp-area" class="sms-otp-area">
         {% if o.status.value == "completed" %}
           <span class="muted" style="font-size:.82rem">Your SMS code</span>
@@ -43,44 +44,71 @@
           <button class="btn btn-primary copy-btn" data-value="{{ o.otp_code }}">
             <svg class="ic sm" aria-hidden="true"><use href="#i-copy"/></svg> Copy code
           </button>
+
         {% elif o.status.value == "waiting_sms" %}
           <div class="status waiting" id="status" role="status" aria-live="polite">
             <span class="spinner" aria-hidden="true"></span> Waiting for the SMS code…
           </div>
-          <p class="hint">Keep this page open — the code appears automatically.
-            No SMS? Your ${{ "%.2f" | format(o.price) }} is refunded.</p>
-        {% elif o.status.value == "refunded" %}
-          <div class="sms-refund-box">
-            <p class="status expired" style="justify-content:flex-start">↺ No SMS received</p>
-            <p class="muted">${{ "%.2f" | format(o.price) }} was refunded to your wallet.</p>
+          <div class="sms-countdown">
+            <div class="sms-countdown-bar"><div id="cd-fill" class="sms-countdown-fill"></div></div>
+            <p class="hint">Auto-refund if no code within <span id="cd-text">—</span></p>
           </div>
-          <a class="btn btn-primary btn-block" href="/sms" style="margin-top:.8rem">Try another number</a>
+
+        {% elif o.status.value == "refunded" %}
+          {% include "_refund_panel.html" %}
+
         {% else %}
           <div class="status expired">This order failed — you were not charged.</div>
+          <a class="btn btn-primary btn-block" href="/sms" style="margin-top:.8rem">Try another number</a>
         {% endif %}
       </div>
     </div>
   </div>
 
-  {% if o.status.value == "waiting_sms" %}
   <script>
+    const ORDER_ID = {{ o.id }};
+    const PRICE = "{{ '%.2f' | format(o.price) }}";
+    const TXN_REF = "{{ txn_ref }}";
+    const DEADLINE = new Date("{{ deadline_iso }}");
+    const CREATED_TTL_MS = {{ (o_ttl if o_ttl is defined else 720) }} * 1000;
+
+    function copyWire() {
+      document.querySelectorAll(".copy-btn").forEach(b => {
+        if (b._wired) return; b._wired = true;
+        b.addEventListener("click", async () => {
+          try { await navigator.clipboard.writeText(b.dataset.value);
+            const o = b.innerHTML; b.innerHTML = "✓ Copied";
+            setTimeout(() => b.innerHTML = o, 1400); } catch (e) {}
+        });
+      });
+    }
+    copyWire();
+
+    // Countdown bar (waiting state only)
+    function tickCountdown() {
+      const fill = document.getElementById("cd-fill");
+      const txt = document.getElementById("cd-text");
+      if (!fill || !txt) return;
+      const leftMs = Math.max(0, DEADLINE - Date.now());
+      const left = Math.floor(leftMs / 1000);
+      txt.textContent = Math.floor(left / 60) + "m " + String(left % 60).padStart(2, "0") + "s";
+      fill.style.width = Math.max(0, Math.min(100, leftMs / CREATED_TTL_MS * 100)) + "%";
+    }
+
+    {% if o.status.value == "waiting_sms" %}
+    tickCountdown(); setInterval(tickCountdown, 1000);
+
     async function poll() {
       try {
-        const r = await fetch("/web/sms/{{ o.id }}/status");
+        const r = await fetch(`/web/sms/${ORDER_ID}/status`);
         const d = await r.json();
-        if (d.status === "completed" || d.status === "refunded") { location.reload(); return; }
+        if (d.status === "completed" || d.status === "refunded" || d.status === "failed") {
+          location.reload(); return;
+        }
       } catch (e) {}
       setTimeout(poll, 4000);
     }
     setTimeout(poll, 4000);
-  </script>
-  {% endif %}
-  <script>
-    document.querySelectorAll(".copy-btn").forEach(b =>
-      b.addEventListener("click", async () => {
-        try { await navigator.clipboard.writeText(b.dataset.value);
-          const o = b.innerHTML; b.innerHTML = "✓ Copied";
-          setTimeout(() => b.innerHTML = o, 1400); } catch (e) {}
-      }));
+    {% endif %}
   </script>
 {% endblock %}

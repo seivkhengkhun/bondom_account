@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from shared import payment_service, services
+from shared.config import settings
 from shared.database import engine, get_db, init_db
 from shared.schemas import (
     OrderCreate,
@@ -39,7 +40,16 @@ _poll_tasks: set[asyncio.Task[bool]] = set()
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Dev convenience only — in production, manage schema with Alembic.
     await init_db()
+    # Background sweeper: settles any SMS orders left WAITING (refunds on
+    # timeout) so a restart can never strand a customer's money.
+    sweep_task: asyncio.Task | None = None
+    if settings.sms_enabled:
+        from shared.sms_service import sweep_waiting_orders
+
+        sweep_task = asyncio.create_task(sweep_waiting_orders())
     yield
+    if sweep_task is not None:
+        sweep_task.cancel()
     for task in _poll_tasks:
         task.cancel()
     await engine.dispose()

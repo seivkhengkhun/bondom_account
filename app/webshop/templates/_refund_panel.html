@@ -1,0 +1,29 @@
+{# Fintech-style refund panel — shown when an SMS order was refunded. #}
+<div class="refund-panel">
+  <div class="refund-head">
+    <span class="refund-ic"><svg class="ic" aria-hidden="true"><use href="#i-check"/></svg></span>
+    <div>
+      <h3>Refund completed</h3>
+      <p class="muted">No SMS was delivered, so your payment was returned in full.</p>
+    </div>
+  </div>
+
+  {# refund progress: all three done, since our refund is atomic + instant #}
+  <ol class="refund-steps" aria-label="Refund progress">
+    <li class="done"><span class="rf-dot"><svg class="ic sm" aria-hidden="true"><use href="#i-check"/></svg></span>Initiated</li>
+    <li class="done"><span class="rf-dot"><svg class="ic sm" aria-hidden="true"><use href="#i-check"/></svg></span>Processed</li>
+    <li class="done"><span class="rf-dot"><svg class="ic sm" aria-hidden="true"><use href="#i-check"/></svg></span>Completed</li>
+  </ol>
+
+  <dl class="refund-meta">
+    <div><dt>Amount refunded</dt><dd class="refund-amt">${{ "%.2f" | format(o.price) }}</dd></div>
+    <div><dt>Credited to</dt><dd>Wallet balance</dd></div>
+    <div><dt>Transaction ID</dt><dd><code>{{ txn_ref }}</code></dd></div>
+    {% if resolved_at %}<div><dt>Completed at</dt><dd>{{ resolved_at }} UTC</dd></div>{% endif %}
+  </dl>
+
+  <div class="refund-actions">
+    <a class="btn btn-primary" href="/sms">Try another number</a>
+    <a class="btn btn-ghost" href="/wallet">View wallet</a>
+  </div>
+</div>

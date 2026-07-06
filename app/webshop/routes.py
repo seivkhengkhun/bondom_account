@@ -506,12 +506,43 @@ async def _owned_sms_order(request: Request, sms_id: int):
     return order
 
 
+def _sms_deadline_iso(order) -> str:
+    from datetime import timedelta, timezone
+
+    created = order.created_at
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=timezone.utc)
+    deadline = created + timedelta(seconds=sms_service.SMS_ORDER_TTL_SECONDS)
+    return deadline.isoformat()
+
+
+def _sms_txn_ref(order) -> str:
+    return f"SMS-{order.id:06d}"
+
+
 @router.get("/sms/{sms_id}", response_class=HTMLResponse)
 async def sms_order_page(request: Request, sms_id: int):
     order = await _owned_sms_order(request, sms_id)
     if order is None:
         return RedirectResponse("/sms")
-    return await _render(request, "sms_order.html", o=order)
+    # Lazily settle on view too, so a refund shows even without JS polling.
+    try:
+        async with AsyncSessionLocal() as session:
+            order = await sms_service.refresh_sms_order(session, order.id)
+    except sms_service.SmsServiceError:
+        pass
+    resolved_at = (
+        order.last_checked_at.strftime("%Y-%m-%d %H:%M")
+        if order.last_checked_at else ""
+    )
+    return await _render(
+        request,
+        "sms_order.html",
+        o=order,
+        deadline_iso=_sms_deadline_iso(order),
+        txn_ref=_sms_txn_ref(order),
+        resolved_at=resolved_at,
+    )
 
 
 @router.get("/web/sms/{sms_id}/status")
@@ -524,8 +555,18 @@ async def sms_order_status(request: Request, sms_id: int) -> JSONResponse:
             order = await sms_service.refresh_sms_order(session, order.id)
     except sms_service.SmsServiceError:
         pass
+    resolved_at = (
+        order.last_checked_at.strftime("%Y-%m-%d %H:%M")
+        if order.last_checked_at else None
+    )
     return JSONResponse(
-        {"status": order.status.value, "otp": order.otp_code or None}
+        {
+            "status": order.status.value,
+            "otp": order.otp_code or None,
+            "price": f"{order.price:.2f}",
+            "txn_ref": _sms_txn_ref(order),
+            "resolved_at": resolved_at,
+        }
     )
 
 

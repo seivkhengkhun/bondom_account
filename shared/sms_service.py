@@ -32,7 +32,7 @@ from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 
 import httpx
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from shared.config import settings
@@ -53,7 +53,11 @@ CATEGORIES = {"facebook": "fb", "instagram": "ig"}
 MAX_WAITING_PER_USER = 3
 POLL_THROTTLE_SECONDS = 3
 WATCH_INTERVAL_SECONDS = 5
-WATCH_TIMEOUT_SECONDS = 20 * 60  # give up watching after 20 minutes
+# If no SMS arrives within this window, the rental is dead — auto-refund
+# the customer regardless of what the provider status says. This is the
+# safety net that guarantees "no code within timeout ⇒ money back".
+SMS_ORDER_TTL_SECONDS = 12 * 60  # 12 minutes
+WATCH_TIMEOUT_SECONDS = SMS_ORDER_TTL_SECONDS + 90  # keep watching past TTL
 STOCK_CACHE_SECONDS = 60
 REQUEST_TIMEOUT = 15
 
@@ -344,11 +348,51 @@ async def create_sms_order(
     return order
 
 
-async def refresh_sms_order(session: AsyncSession, order_id: int) -> SmsOrder:
-    """Poll the provider for an order's SMS code; handle refunds.
+def _aware(dt: datetime | None) -> datetime | None:
+    if dt is None:
+        return None
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
 
-    Idempotent: terminal orders return unchanged; the provider is called
-    at most once per POLL_THROTTLE_SECONDS per order.
+
+async def _claim_transition(
+    session: AsyncSession,
+    order_id: int,
+    new_status: SmsOrderStatus,
+    now: datetime,
+    otp_code: str = "",
+) -> bool:
+    """Atomically move an order WAITING → terminal. Returns True iff THIS
+    call won the race (so only the winner credits the wallet). The
+    conditional UPDATE makes a double-refund impossible even if the page
+    poller and the background watcher fire at the same instant.
+    """
+    async with transaction_scope(session):
+        result = await session.execute(
+            update(SmsOrder)
+            .where(
+                SmsOrder.id == order_id,
+                SmsOrder.status == SmsOrderStatus.WAITING,
+            )
+            .values(
+                status=new_status,
+                otp_code=otp_code,
+                last_checked_at=now,
+            )
+        )
+    return (result.rowcount or 0) == 1
+
+
+async def refresh_sms_order(session: AsyncSession, order_id: int) -> SmsOrder:
+    """Poll the provider for an order's SMS code; settle it if terminal.
+
+    Resolution rules (in order):
+      1. OTP present         → COMPLETED (customer keeps paying, no refund).
+      2. Provider terminal   → REFUNDED  (provider gave our money back).
+      3. Past SMS_ORDER_TTL  → REFUNDED  (safety net: no code in time ⇒
+                                          refund even if the provider is
+                                          still "running" or unreachable).
+    Idempotent and concurrency-safe via ``_claim_transition``; the
+    provider is polled at most once per POLL_THROTTLE_SECONDS.
     """
     async with transaction_scope(session):
         order = await session.get(SmsOrder, order_id)
@@ -358,49 +402,58 @@ async def refresh_sms_order(session: AsyncSession, order_id: int) -> SmsOrder:
         return order
 
     now = datetime.now(timezone.utc)
-    last = order.last_checked_at
-    if last is not None:
-        if last.tzinfo is None:
-            last = last.replace(tzinfo=timezone.utc)
-        if (now - last).total_seconds() < POLL_THROTTLE_SECONDS:
-            return order
+    last = _aware(order.last_checked_at)
+    if last is not None and (now - last).total_seconds() < POLL_THROTTLE_SECONDS:
+        return order
 
+    age = (now - _aware(order.created_at)).total_seconds() if order.created_at else 0
+    timed_out = age >= SMS_ORDER_TTL_SECONDS
+
+    otp = ""
+    provider_refunded = False
     try:
         # The live API requires ``id`` (NOT ``order_id``, despite the docs).
         data = await _get("/v1/api/check-otp.php", id=order.provider_order_id)
+        otp = _extract_otp(data)
+        provider_refunded = (
+            not otp and not _is_waiting(data) and _is_refunded(data)
+        )
     except SmsServiceError:
-        return order  # transient — stay in waiting, page keeps polling
+        # Provider unreachable. If we're still inside the window, keep
+        # waiting; if we're past the deadline, refund anyway (trust-first —
+        # we cannot confirm delivery and the number is dead).
+        if not timed_out:
+            return order
 
-    otp = _extract_otp(data)
-    # Terminal-without-code = provider refunded us. While "running", wait.
-    refunded = not otp and not _is_waiting(data) and _is_refunded(data)
+    if otp:
+        if await _claim_transition(
+            session, order_id, SmsOrderStatus.COMPLETED, now, otp_code=otp
+        ):
+            logger.info("SMS order %s COMPLETED (code received)", order_id)
+    elif provider_refunded or timed_out:
+        reason = "provider refund" if provider_refunded else "TTL timeout"
+        if await _claim_transition(
+            session, order_id, SmsOrderStatus.REFUNDED, now
+        ):
+            await add_user_balance(session, order.user_id, order.price)
+            logger.info(
+                "SMS order %s REFUNDED ($%s → user %s wallet) reason=%s",
+                order_id, order.price, order.user_id, reason,
+            )
+    else:
+        # Still running, still inside the window — just record the poll time.
+        async with transaction_scope(session):
+            fresh = await session.get(SmsOrder, order_id)
+            if fresh is not None and fresh.status is SmsOrderStatus.WAITING:
+                fresh.last_checked_at = now
 
     async with transaction_scope(session):
-        fresh = await session.get(SmsOrder, order_id)
-        if fresh is None or fresh.status is not SmsOrderStatus.WAITING:
-            return fresh or order
-        fresh.last_checked_at = now
-        if otp:
-            fresh.status = SmsOrderStatus.COMPLETED
-            fresh.otp_code = otp
-            logger.info("SMS order %s completed (code received)", order_id)
-        elif refunded:
-            fresh.status = SmsOrderStatus.REFUNDED
-            logger.info("SMS order %s refunded by provider", order_id)
-        order = fresh
-
-    if order.status is SmsOrderStatus.REFUNDED:
-        # Outside the row transaction: credit the customer back in full.
-        await add_user_balance(session, order.user_id, order.price)
-        logger.info(
-            "SMS order %s: refunded $%s to user %s wallet",
-            order_id, order.price, order.user_id,
-        )
-    return order
+        return await session.get(SmsOrder, order_id) or order
 
 
 async def watch_sms_order(order_id: int) -> None:
-    """Background poller so refunds land even if the buyer closes the tab."""
+    """Background poller so the code/refund lands even if the buyer closes
+    the tab. Runs past the TTL so the timeout-refund always fires."""
     deadline = time.monotonic() + WATCH_TIMEOUT_SECONDS
     while time.monotonic() < deadline:
         await asyncio.sleep(WATCH_INTERVAL_SECONDS)
@@ -408,16 +461,56 @@ async def watch_sms_order(order_id: int) -> None:
             async with AsyncSessionLocal() as session:
                 order = await refresh_sms_order(session, order_id)
         except SmsServiceError:
+            order = None  # transient — keep watching until the deadline
+        if order is not None and order.status is not SmsOrderStatus.WAITING:
             return
-        if order is None or order.status is not SmsOrderStatus.WAITING:
-            return
-    logger.warning("SMS order %s watch timed out (still waiting)", order_id)
+    # Last-resort settle: force one final refresh (which will TTL-refund).
+    try:
+        async with AsyncSessionLocal() as session:
+            final = await refresh_sms_order(session, order_id)
+        if final is not None and final.status is SmsOrderStatus.WAITING:
+            logger.error(
+                "SMS order %s STILL waiting after watch deadline — "
+                "manual review needed", order_id,
+            )
+    except SmsServiceError:
+        logger.error("SMS order %s could not be settled at deadline", order_id)
 
 
 def spawn_sms_watcher(order_id: int) -> None:
     task = asyncio.create_task(watch_sms_order(order_id))
     _watch_tasks.add(task)
     task.add_done_callback(_watch_tasks.discard)
+
+
+async def sweep_waiting_orders() -> None:
+    """Settle any orders left WAITING (e.g. after a process restart that
+    killed their in-memory watchers). Refreshing each one applies the same
+    resolution rules — including the TTL refund — so no customer stays
+    charged just because the server bounced. Runs forever in the
+    background; safe to start once at app boot."""
+    await asyncio.sleep(15)  # let startup settle
+    while True:
+        try:
+            async with AsyncSessionLocal() as session:
+                async with transaction_scope(session):
+                    ids = list(
+                        await session.scalars(
+                            select(SmsOrder.id).where(
+                                SmsOrder.status == SmsOrderStatus.WAITING
+                            )
+                        )
+                    )
+            for oid in ids:
+                try:
+                    async with AsyncSessionLocal() as session:
+                        await refresh_sms_order(session, oid)
+                except SmsServiceError:
+                    pass
+                await asyncio.sleep(1)  # gentle on the provider
+        except Exception:
+            logger.exception("SMS sweep iteration failed")
+        await asyncio.sleep(60)
 
 
 async def list_user_sms_orders(
