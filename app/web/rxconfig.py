@@ -22,16 +22,16 @@ load_dotenv(PROJECT_ROOT / ".env")
 
 # Local defaults: frontend 3000, backend 8001.
 # In managed platforms, these can be overridden with env vars.
-frontend_port = int(os.getenv("FRONTEND_PORT", "3000"))
 backend_port = int(os.getenv("BACKEND_PORT", "8001"))
 
 # When served from a remote host, the browser must reach the Reflex
 # backend over the public address, e.g. REFLEX_API_URL=http://1.2.3.4:8001
 api_url = os.getenv("REFLEX_API_URL", f"http://localhost:{backend_port}")
 
-config = rx.Config(
-    app_name="admin",
-    frontend_port=frontend_port,
-    backend_port=backend_port,
-    api_url=api_url,
-)
+_kwargs = dict(app_name="admin", backend_port=backend_port, api_url=api_url)
+# Reflex rejects a frontend port in --backend-only mode, so only pass it
+# when explicitly configured (local dev already defaults to 3000).
+if os.getenv("FRONTEND_PORT"):
+    _kwargs["frontend_port"] = int(os.environ["FRONTEND_PORT"])
+
+config = rx.Config(**_kwargs)
