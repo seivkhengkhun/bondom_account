@@ -128,6 +128,152 @@ async def cmd_start(message: Message) -> None:
     )
 
 
+# --------------------------------------------------------------------------- #
+# Product catalog — categories → paginated product list → product card.
+# Navigation edits one message in place so the chat stays clean.
+# --------------------------------------------------------------------------- #
+CATALOG_PAGE_SIZE = 8
+
+
+async def _active_overviews() -> tuple[list, bool]:
+    async with AsyncSessionLocal() as session:
+        overviews = await services.list_product_overviews(session)
+        show_stock = await services.get_bot_show_stock(session)
+    return [o for o in overviews if o.product.is_active], show_stock
+
+
+def _catalog_categories(active: list) -> list[str]:
+    return sorted({(o.product.category or "Other") for o in active})
+
+
+def _category_menu(active: list) -> tuple[str, InlineKeyboardMarkup]:
+    categories = _catalog_categories(active)
+    counts = {
+        c: sum(1 for o in active if (o.product.category or "Other") == c)
+        for c in categories
+    }
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=f"📂 {c}  ({counts[c]})",
+                callback_data=f"pcat:{i}:0",
+            )
+        ]
+        for i, c in enumerate(categories)
+    ]
+    text = (
+        "🛍 <b>Product Catalog</b>\n\n"
+        "Choose a category to see its products:"
+    )
+    return text, InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _category_page(
+    active: list, show_stock: bool, cat_idx: int, page: int
+) -> tuple[str, InlineKeyboardMarkup] | None:
+    categories = _catalog_categories(active)
+    if not 0 <= cat_idx < len(categories):
+        return None
+    category = categories[cat_idx]
+    items = [
+        o for o in active if (o.product.category or "Other") == category
+    ]
+    pages = max(1, -(-len(items) // CATALOG_PAGE_SIZE))
+    page = max(0, min(page, pages - 1))
+    chunk = items[page * CATALOG_PAGE_SIZE:(page + 1) * CATALOG_PAGE_SIZE]
+
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=(
+                    f"{o.product.name} — ${o.product.price}"
+                    + (f"  ({o.available} left)" if show_stock else "")
+                ),
+                callback_data=f"pview:{o.product.id}:{cat_idx}:{page}",
+            )
+        ]
+        for o in chunk
+    ]
+    nav: list[InlineKeyboardButton] = []
+    if page > 0:
+        nav.append(
+            InlineKeyboardButton(
+                text="◀️ Prev", callback_data=f"pcat:{cat_idx}:{page - 1}"
+            )
+        )
+    if page < pages - 1:
+        nav.append(
+            InlineKeyboardButton(
+                text="Next ▶️", callback_data=f"pcat:{cat_idx}:{page + 1}"
+            )
+        )
+    if nav:
+        rows.append(nav)
+    rows.append(
+        [InlineKeyboardButton(text="📂 All categories", callback_data="pcats")]
+    )
+    page_info = f" — page {page + 1}/{pages}" if pages > 1 else ""
+    text = (
+        f"📂 <b>{html.escape(category)}</b>{page_info}\n\n"
+        "Tap a product to see details and buy:"
+    )
+    return text, InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _product_card(
+    active: list, show_stock: bool, product_id: int, cat_idx: int, page: int
+) -> tuple[str, InlineKeyboardMarkup] | None:
+    selected = next(
+        (o for o in active if o.product.id == product_id), None
+    )
+    if selected is None:
+        return None
+    product = selected.product
+    async with AsyncSessionLocal() as session:
+        note = await services.get_product_client_note(session, product.id)
+
+    lines = [f"📦 <b>{html.escape(product.name)}</b>", ""]
+    lines.append(f"💵 Price: <b>${product.price}</b>")
+    if product.warranty_days:
+        lines.append(f"🛡 Warranty: {product.warranty_days} days")
+    if show_stock:
+        lines.append(f"📦 Stock: {selected.available} left")
+    if note:
+        lines.append(f"📝 {html.escape(note)}")
+    lines.extend(["", "Choose how to buy:"])
+
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🛒 Buy with KHQR",
+                    callback_data=f"buy:{product.id}",
+                ),
+                InlineKeyboardButton(
+                    text="⚡ Buy 1 (Wallet)",
+                    callback_data=f"wb1:{product.id}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="◀️ Back",
+                    callback_data=f"pcat:{cat_idx}:{page}",
+                )
+            ],
+        ]
+    )
+    return "\n".join(lines), keyboard
+
+
+async def _edit_or_answer(callback: CallbackQuery, text: str, markup) -> None:
+    """Edit the catalog message in place; ignore 'not modified' noise."""
+    assert callback.message is not None
+    try:
+        await callback.message.edit_text(text, reply_markup=markup)
+    except Exception:
+        await callback.message.answer(text, reply_markup=markup)
+
+
 async def _show_products_for_user(message: Message, telegram_id: int) -> None:
     async with AsyncSessionLocal() as session:
         if await _deny_if_permanently_blocked(session, telegram_id):
@@ -135,42 +281,81 @@ async def _show_products_for_user(message: Message, telegram_id: int) -> None:
                 "🚫 Your account has been permanently blocked. Contact support."
             )
             return
-        overviews = await services.list_product_overviews(session)
-        show_stock = await services.get_bot_show_stock(session)
 
-    active = [o for o in overviews if o.product.is_active]
+    active, show_stock = await _active_overviews()
     if not active:
         await message.answer("No products are available right now.")
         return
 
-    keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text=(
-                        f"{o.product.name} — ${o.product.price} "
-                        f"({o.available} left)"
-                        if show_stock
-                        else f"{o.product.name} — ${o.product.price}"
-                    ),
-                    callback_data=f"buy:{o.product.id}",
-                )
-            ]
-            + [
-                InlineKeyboardButton(
-                    text="⚡ Buy 1 (Wallet)",
-                    callback_data=f"wb1:{o.product.id}",
-                )
-            ]
-            for o in active
-        ]
+    categories = _catalog_categories(active)
+    if len(categories) == 1:
+        # Single category — skip the menu, show its products directly.
+        rendered = _category_page(active, show_stock, 0, 0)
+        if rendered is not None:
+            text, markup = rendered
+            await message.answer(text, reply_markup=markup)
+        return
+
+    text, markup = _category_menu(active)
+    await message.answer(text, reply_markup=markup)
+
+
+@router.callback_query(F.data == "pcats")
+async def cb_catalog_menu(callback: CallbackQuery) -> None:
+    active, _ = await _active_overviews()
+    if not active:
+        await callback.answer("No products are available right now.", show_alert=True)
+        return
+    text, markup = _category_menu(active)
+    await _edit_or_answer(callback, text, markup)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("pcat:"))
+async def cb_catalog_category(callback: CallbackQuery) -> None:
+    if callback.data is None:
+        return
+    try:
+        _, cat_idx, page = callback.data.split(":")
+        rendered_args = int(cat_idx), int(page)
+    except ValueError:
+        await callback.answer()
+        return
+    active, show_stock = await _active_overviews()
+    rendered = _category_page(active, show_stock, *rendered_args) if active else None
+    if rendered is None:
+        await callback.answer("Category changed — reopening catalog.")
+        if active:
+            text, markup = _category_menu(active)
+            await _edit_or_answer(callback, text, markup)
+        return
+    text, markup = rendered
+    await _edit_or_answer(callback, text, markup)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("pview:"))
+async def cb_catalog_product(callback: CallbackQuery) -> None:
+    if callback.data is None:
+        return
+    try:
+        _, product_id, cat_idx, page = callback.data.split(":")
+        args = int(product_id), int(cat_idx), int(page)
+    except ValueError:
+        await callback.answer()
+        return
+    active, show_stock = await _active_overviews()
+    rendered = (
+        await _product_card(active, show_stock, *args) if active else None
     )
-    await message.answer(
-        "🛒 Available products:\n"
-        "- Tap product for KHQR quantity flow\n"
-        "- Or tap 'Buy 1 (Wallet)' for one-tap purchase",
-        reply_markup=keyboard,
-    )
+    if rendered is None:
+        await callback.answer(
+            "This product is no longer available.", show_alert=True
+        )
+        return
+    text, markup = rendered
+    await _edit_or_answer(callback, text, markup)
+    await callback.answer()
 
 
 @router.message(Command("products"))
@@ -694,29 +879,49 @@ async def _deliver_order(callback: CallbackQuery, order: Order) -> None:
 
 
 async def _deliver_order_to_chat(bot: Bot, chat_id: int, order: Order) -> None:
-    """Send purchased inventory data to a chat id."""
-    item_values = [item.data for item in order.items]
-    lines = "\n".join(
-        f"• <code>{html.escape(value)}</code>" for value in item_values
-    )
-    product = None
-    client_note = None
-    if order.items:
-        async with AsyncSessionLocal() as session:
-            product = await session.get(Product, order.items[0].product_id)
-            if product is not None:
-                client_note = await services.get_product_client_note(
-                    session, product.id
-                )
-    warranty = (
-        f"\n🛡 Warranty: {product.warranty_days} days"
-        if product and product.warranty_days else ""
-    )
-    note_block = f"\n📝 Note: {html.escape(client_note)}" if client_note else ""
+    """Send purchased inventory data to a chat id.
+
+    Items are grouped per product so every product shows ITS OWN
+    warranty and delivery note (an order can mix products).
+    """
+    grouped: dict[int, list[str]] = {}
+    for item in order.items:
+        grouped.setdefault(item.product_id, []).append(item.data)
+
+    products: dict[int, Product | None] = {}
+    notes: dict[int, str | None] = {}
+    async with AsyncSessionLocal() as session:
+        for product_id in grouped:
+            products[product_id] = await session.get(Product, product_id)
+            notes[product_id] = await services.get_product_client_note(
+                session, product_id
+            )
+
+    sections: list[str] = []
+    file_sections: list[str] = []
+    for product_id, values in grouped.items():
+        product = products.get(product_id)
+        name = product.name if product else f"Product {product_id}"
+        lines = "\n".join(
+            f"• <code>{html.escape(value)}</code>" for value in values
+        )
+        section = f"📦 <b>{html.escape(name)}</b>\n{lines}"
+        file_section = [name] + [f"- {value}" for value in values]
+        if product and product.warranty_days:
+            section += f"\n🛡 Warranty: {product.warranty_days} days"
+            file_section.append(f"Warranty: {product.warranty_days} days")
+        note = notes.get(product_id)
+        if note:
+            section += f"\n📝 Note: {html.escape(note)}"
+            file_section.append(f"Note: {note}")
+        sections.append(section)
+        file_sections.append("\n".join(file_section))
+
+    body = "\n\n".join(sections)
     await bot.send_message(
         chat_id,
         f"✅ Payment confirmed — order <b>#{order.id}</b>\n\n"
-        f"Your item(s):\n{lines}{warranty}{note_block}\n\n"
+        f"{body}\n\n"
         "Thank you for your purchase!"
     )
 
@@ -725,13 +930,8 @@ async def _deliver_order_to_chat(bot: Bot, chat_id: int, order: Order) -> None:
         f"Order #{order.id}",
         "Bondom Account",
         "",
-        "Items:",
     ]
-    text_lines.extend([f"- {value}" for value in item_values])
-    if product and product.warranty_days:
-        text_lines.extend(["", f"Warranty: {product.warranty_days} days"])
-    if client_note:
-        text_lines.extend(["", f"Note: {client_note}"])
+    text_lines.append("\n\n".join(file_sections))
 
     order_file = BufferedInputFile(
         "\n".join(text_lines).encode("utf-8"),
