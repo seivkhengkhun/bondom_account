@@ -1,50 +1,89 @@
 {% extends "base.html" %}
 {% block title %}{{ o.product.name }} — Bondom Account{% endblock %}
 {% block content %}
-  <a class="back" href="/">← Back to catalog</a>
-  <div class="card product-detail">
-    <h1>{{ o.product.name }}</h1>
-    <p class="price big">${{ o.product.price }}</p>
-    <p class="meta">
-      <span class="badge">{{ o.product.category }}</span>
-      {% if show_stock %}
-        {% if o.available > 0 %}
-          <span class="badge ok">{{ o.available }} in stock</span>
-        {% else %}
-          <span class="badge out">Out of stock</span>
-        {% endif %}
-      {% endif %}
-      {% if o.product.warranty_days %}
-        <span class="badge warranty">🛡 {{ o.product.warranty_days }} days warranty</span>
-      {% endif %}
-    </p>
-    {% if note %}
-      <div class="note">📝 {{ note }}</div>
-    {% endif %}
-    {% if error %}<p class="error">⚠ {{ error }}</p>{% endif %}
+  <nav class="breadcrumb" aria-label="Breadcrumb">
+    <a href="/">Catalog</a> <span aria-hidden="true">›</span>
+    <span>{{ o.product.category }}</span> <span aria-hidden="true">›</span>
+    <span class="current">{{ o.product.name }}</span>
+  </nav>
 
-    {% if session_user %}
-      {% if o.available > 0 %}
-        <form method="post" action="/web/buy" class="buy-form">
-          <input type="hidden" name="product_id" value="{{ o.product.id }}">
-          <label>Quantity
-            <input type="number" name="quantity" value="1" min="1" max="{{ o.available }}">
-          </label>
-          <button type="submit" class="btn primary">🛒 Buy with KHQR</button>
-        </form>
-        <p class="hint">You'll get a KHQR to scan with ABA, ACLEDA, Wing, Bakong or any Cambodian banking app. Items are delivered here and to your Telegram.</p>
-      {% else %}
-        <p class="error">This product is currently out of stock.</p>
-      {% endif %}
-    {% else %}
-      <div class="login-box">
-        <p>Sign in with Telegram to buy:</p>
-        <script async src="https://telegram.org/js/telegram-widget.js?22"
-                data-telegram-login="{{ bot_username }}"
-                data-size="large"
-                data-auth-url="{{ auth_url }}"
-                data-request-access="write"></script>
+  <div class="product-layout">
+    <section class="card product-info">
+      <span class="chip">{{ o.product.category }}</span>
+      <h1>{{ o.product.name }}</h1>
+      <div class="meta">
+        {% if show_stock %}
+          {% if o.available > 0 %}
+            <span class="badge ok">● {{ o.available }} in stock</span>
+          {% else %}
+            <span class="badge out">Sold out</span>
+          {% endif %}
+        {% endif %}
+        {% if o.product.warranty_days %}
+          <span class="badge warranty"><svg class="ic sm" aria-hidden="true"><use href="#i-shield"/></svg> {{ o.product.warranty_days }}-day warranty</span>
+        {% endif %}
       </div>
-    {% endif %}
+
+      {% if note %}
+        <div class="note">
+          <p class="note-title">📝 Product information</p>
+          {{ note }}
+        </div>
+      {% endif %}
+
+      <ul class="feature-list" role="list">
+        <li><svg class="ic" aria-hidden="true"><use href="#i-bolt"/></svg> Delivered automatically the moment payment confirms</li>
+        <li><svg class="ic" aria-hidden="true"><use href="#i-qr"/></svg> Pay by KHQR — ABA, ACLEDA, Wing, Bakong &amp; more</li>
+        <li><svg class="ic tg" aria-hidden="true"><use href="#i-tg"/></svg> A copy is also sent to your Telegram chat</li>
+      </ul>
+    </section>
+
+    <aside class="card buy-panel" aria-label="Purchase">
+      <p class="price big">${{ o.product.price }}<span class="per"> / item</span></p>
+      {% if error %}<p class="alert error" role="alert">⚠ {{ error }}</p>{% endif %}
+
+      {% if session_user %}
+        {% if o.available > 0 %}
+          <form method="post" action="/web/buy" class="buy-form">
+            <input type="hidden" name="product_id" value="{{ o.product.id }}">
+            <label for="qty">Quantity</label>
+            <div class="stepper">
+              <button type="button" data-step="-1" aria-label="Decrease quantity">−</button>
+              <input id="qty" type="number" name="quantity" value="1" min="1"
+                     max="{{ o.available }}" inputmode="numeric">
+              <button type="button" data-step="1" aria-label="Increase quantity">+</button>
+            </div>
+            <p class="total">Total: <b id="total">${{ o.product.price }}</b></p>
+            <button type="submit" class="btn btn-primary btn-lg btn-block">
+              <svg class="ic" aria-hidden="true"><use href="#i-qr"/></svg> Pay with KHQR
+            </button>
+          </form>
+          <script>
+            const unit = parseFloat("{{ o.product.price }}");
+            const qty = document.getElementById("qty");
+            const maxQty = parseInt(qty.max, 10);
+            function refresh() {
+              let v = Math.min(maxQty, Math.max(1, parseInt(qty.value || "1", 10)));
+              qty.value = v;
+              document.getElementById("total").textContent = "$" + (unit * v).toFixed(2);
+            }
+            document.querySelectorAll(".stepper [data-step]").forEach(b =>
+              b.addEventListener("click", () => { qty.value = (parseInt(qty.value||"1",10) + parseInt(b.dataset.step,10)); refresh(); }));
+            qty.addEventListener("input", refresh);
+          </script>
+        {% else %}
+          <p class="alert error">This product is currently out of stock — check back soon.</p>
+        {% endif %}
+      {% else %}
+        <div class="login-box" id="signin">
+          <p>Sign in with Telegram to buy:</p>
+          <script async src="https://telegram.org/js/telegram-widget.js?22"
+                  data-telegram-login="{{ bot_username }}"
+                  data-size="large"
+                  data-auth-url="{{ auth_url }}"
+                  data-request-access="write"></script>
+        </div>
+      {% endif %}
+    </aside>
   </div>
 {% endblock %}

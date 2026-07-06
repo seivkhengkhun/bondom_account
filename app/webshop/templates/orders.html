@@ -1,38 +1,36 @@
 {% extends "base.html" %}
 {% block title %}My Orders — Bondom Account{% endblock %}
 {% block content %}
-  <div class="card">
+  <div class="page-head">
     <h1>📦 My Orders</h1>
-    <p class="meta">💰 Wallet balance: <b>${{ balance }}</b></p>
-    {% if orders %}
-      <table class="orders-table">
-        <thead>
-          <tr><th>Order</th><th>Total</th><th>Status</th><th>Date</th><th></th></tr>
-        </thead>
-        <tbody>
-          {% for o in orders %}
-            <tr>
-              <td>#{{ o.id }}</td>
-              <td>${{ o.total_price }}</td>
-              <td>
-                <span class="badge {% if o.status.value == 'delivered' %}ok{% elif o.status.value == 'pending' %}warn{% elif o.status.value == 'canceled' %}out{% endif %}">
-                  {{ o.status.value }}
-                </span>
-              </td>
-              <td>{{ o.created_at.strftime("%Y-%m-%d %H:%M") }}</td>
-              <td>
-                {% if o.status.value == "pending" %}
-                  <a class="btn small" href="/pay/{{ o.id }}">Pay now</a>
-                {% else %}
-                  <a class="btn small" href="/order/{{ o.id }}">View</a>
-                {% endif %}
-              </td>
-            </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    {% else %}
-      <p>No orders yet — <a href="/">browse the catalog</a> to get started.</p>
-    {% endif %}
+    <span class="wallet-chip" title="Wallet balance">💰 ${{ balance }}</span>
   </div>
+
+  {% if orders %}
+    <div class="orders-list">
+      {% for o in orders %}
+        <a class="card order-row"
+           href="{% if o.status.value == 'pending' %}/pay/{{ o.id }}{% else %}/order/{{ o.id }}{% endif %}">
+          <div class="or-main">
+            <span class="or-id">#{{ o.id }}</span>
+            <span class="or-date muted">{{ o.created_at.strftime("%Y-%m-%d %H:%M") }}</span>
+          </div>
+          <span class="or-total">${{ o.total_price }}</span>
+          <span class="badge {% if o.status.value == 'delivered' %}ok{% elif o.status.value == 'pending' %}warn{% elif o.status.value == 'canceled' %}out{% endif %}">
+            {{ o.status.value }}
+          </span>
+          <span class="or-action">
+            {% if o.status.value == "pending" %}Pay now →{% else %}View →{% endif %}
+          </span>
+        </a>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="card center-card">
+      <p class="empty-emoji" aria-hidden="true">🛒</p>
+      <h2>No orders yet</h2>
+      <p class="muted">Your purchases will appear here — on the website and in the Telegram bot.</p>
+      <a class="btn btn-primary" href="/">Browse the catalog</a>
+    </div>
+  {% endif %}
 {% endblock %}

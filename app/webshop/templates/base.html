@@ -3,30 +3,68 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Bondom Account — premium digital accounts with instant delivery. Pay with KHQR from any Cambodian banking app.">
   <title>{% block title %}Bondom Account — Digital Store{% endblock %}</title>
   <link rel="stylesheet" href="/web/static/shop.css">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛍</text></svg>">
 </head>
 <body>
+  <svg style="display:none" aria-hidden="true">
+    <symbol id="i-cart" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M9 22a1 1 0 100-2 1 1 0 000 2zm11 0a1 1 0 100-2 1 1 0 000 2zM1 1h4l2.68 13.39a2 2 0 002 1.61h9.72a2 2 0 002-1.61L23 6H6"/></symbol>
+    <symbol id="i-bolt" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" d="M20 6L9 17l-5-5"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path fill="none" stroke="currentColor" stroke-width="2" d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></symbol>
+    <symbol id="i-tg" viewBox="0 0 24 24"><path fill="currentColor" d="M23.9 3.1L20.3 20c-.3 1.2-1 1.5-2 .9l-5.5-4-2.7 2.6c-.3.3-.5.5-1.1.5l.4-5.6L19.6 5c.4-.4-.1-.6-.7-.2L6.3 12.7.9 11c-1.2-.4-1.2-1.2.2-1.7L22.3 1.3c1-.4 1.9.2 1.6 1.8z"/></symbol>
+    <symbol id="i-qr" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h3v3h-3zM19 14h2v2h-2zM14 19h2v2h-2zM19 19h2v2h-2z"/></symbol>
+    <symbol id="i-package" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M16.5 9.4L7.55 4.24M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16zM3.27 6.96L12 12.01l8.73-5.05M12 22.08V12"/></symbol>
+  </svg>
+
   <header class="topbar">
-    <a class="brand" href="/">🛍 <span>Bondom Account</span></a>
-    <nav>
-      <a href="/">Catalog</a>
-      {% if session_user %}
-        <a href="/my/orders">My Orders</a>
-        <span class="user-chip">@{{ session_user.u or session_user.tid }}</span>
-        <a class="muted" href="/logout">Sign out</a>
-      {% endif %}
-    </nav>
+    <div class="topbar-inner">
+      <a class="brand" href="/" aria-label="Bondom Account home">
+        <span class="brand-mark">🛍</span>
+        <span class="brand-name">Bondom<b>Account</b></span>
+      </a>
+      <nav aria-label="Main">
+        <a href="/" class="nav-link">Catalog</a>
+        {% if session_user %}
+          <a href="/my/orders" class="nav-link"><svg class="ic" aria-hidden="true"><use href="#i-package"/></svg> My Orders</a>
+          <div class="user-menu">
+            <span class="user-chip" title="Signed in via Telegram">
+              <svg class="ic tg" aria-hidden="true"><use href="#i-tg"/></svg>
+              {{ session_user.u or session_user.tid }}
+            </span>
+            <a class="nav-link muted" href="/logout">Sign out</a>
+          </div>
+        {% else %}
+          <a href="#signin" class="btn btn-outline btn-sm">
+            <svg class="ic tg" aria-hidden="true"><use href="#i-tg"/></svg> Sign in
+          </a>
+        {% endif %}
+      </nav>
+    </div>
   </header>
 
-  <main class="container">
+  <main class="container" id="main">
     {% block content %}{% endblock %}
   </main>
 
   <footer class="footer">
-    <p>Bondom Account — instant digital delivery · Pay with KHQR (ABA, ACLEDA, Wing, Bakong…)</p>
-    <p><a href="https://t.me/{{ bot_username }}">💬 Telegram bot: @{{ bot_username }}</a></p>
+    <div class="footer-inner">
+      <div>
+        <p class="footer-brand">🛍 Bondom Account</p>
+        <p class="muted">Premium digital accounts · Instant automatic delivery</p>
+      </div>
+      <div>
+        <p class="footer-title">Payments</p>
+        <p class="muted">KHQR — ABA · ACLEDA · Wing · Bakong</p>
+      </div>
+      <div>
+        <p class="footer-title">Support</p>
+        <p><a href="https://t.me/{{ bot_username }}">💬 @{{ bot_username }}</a></p>
+      </div>
+    </div>
   </footer>
 </body>
 </html>

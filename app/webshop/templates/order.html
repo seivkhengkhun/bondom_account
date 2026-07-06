@@ -1,32 +1,72 @@
 {% extends "base.html" %}
 {% block title %}Order #{{ order.id }} — Bondom Account{% endblock %}
 {% block content %}
-  <a class="back" href="/my/orders">← My orders</a>
-  <div class="card">
-    <h1>
-      {% if order.status.value == "delivered" %}✅{% elif order.status.value == "paid" %}💰{% elif order.status.value == "pending" %}⏳{% else %}❌{% endif %}
-      Order #{{ order.id }} — {{ order.status.value }}
-    </h1>
-    <p class="meta">Total: <b>${{ order.total_price }}</b> · {{ order.created_at.strftime("%Y-%m-%d %H:%M") }}</p>
+  <nav class="breadcrumb" aria-label="Breadcrumb">
+    <a href="/my/orders">My orders</a> <span aria-hidden="true">›</span>
+    <span class="current">Order #{{ order.id }}</span>
+  </nav>
 
-    {% if order.status.value in ("delivered", "paid") %}
-      {% for s in sections %}
-        <div class="delivery">
-          <h3>📦 {{ s.name }}</h3>
-          <ul class="items">
-            {% for value in s["items"] %}
-              <li><code>{{ value }}</code></li>
-            {% endfor %}
-          </ul>
-          {% if s.warranty %}<p class="badge warranty">🛡 Warranty: {{ s.warranty }} days</p>{% endif %}
-          {% if s.note %}<div class="note">📝 {{ s.note }}</div>{% endif %}
+  {% if order.status.value in ("delivered", "paid") %}
+    <div class="success-banner" role="status">
+      <span class="success-ic"><svg class="ic" aria-hidden="true"><use href="#i-check"/></svg></span>
+      <div>
+        <h1>Order #{{ order.id }} delivered</h1>
+        <p class="muted">${{ order.total_price }} · {{ order.created_at.strftime("%Y-%m-%d %H:%M") }} ·
+           a copy was sent to your Telegram chat</p>
+      </div>
+    </div>
+
+    {% for s in sections %}
+      <section class="card delivery">
+        <div class="delivery-head">
+          <h2>📦 {{ s.name }}</h2>
+          {% if s.warranty %}
+            <span class="badge warranty"><svg class="ic sm" aria-hidden="true"><use href="#i-shield"/></svg> {{ s.warranty }}-day warranty</span>
+          {% endif %}
         </div>
-      {% endfor %}
-      <p class="hint">A copy was also sent to your Telegram chat with the bot.</p>
-    {% elif order.status.value == "pending" %}
-      <p>This order is awaiting payment. <a href="/pay/{{ order.id }}">Open the payment QR →</a></p>
-    {% else %}
-      <p>This order was canceled and its stock returned.</p>
-    {% endif %}
-  </div>
+
+        <ul class="cred-list" role="list">
+          {% for value in s["items"] %}
+            <li class="cred-row">
+              <code>{{ value }}</code>
+              <button class="btn btn-ghost btn-sm copy-btn" data-value="{{ value }}" aria-label="Copy item">
+                <svg class="ic sm" aria-hidden="true"><use href="#i-copy"/></svg> Copy
+              </button>
+            </li>
+          {% endfor %}
+        </ul>
+
+        {% if s.note %}
+          <div class="note">
+            <p class="note-title">📝 Important — read before use</p>
+            {{ s.note }}
+          </div>
+        {% endif %}
+      </section>
+    {% endfor %}
+
+    <script>
+      document.querySelectorAll(".copy-btn").forEach(btn =>
+        btn.addEventListener("click", async () => {
+          try {
+            await navigator.clipboard.writeText(btn.dataset.value);
+            const old = btn.innerHTML;
+            btn.innerHTML = "✓ Copied";
+            btn.classList.add("copied");
+            setTimeout(() => { btn.innerHTML = old; btn.classList.remove("copied"); }, 1500);
+          } catch (e) { /* clipboard unavailable */ }
+        }));
+    </script>
+  {% elif order.status.value == "pending" %}
+    <div class="card center-card">
+      <h1>⏳ Order #{{ order.id }} awaits payment</h1>
+      <p class="muted">Total ${{ order.total_price }}</p>
+      <a class="btn btn-primary btn-lg" href="/pay/{{ order.id }}">Open payment QR →</a>
+    </div>
+  {% else %}
+    <div class="card center-card">
+      <h1>❌ Order #{{ order.id }} canceled</h1>
+      <p class="muted">Reserved stock was returned. <a href="/">Back to catalog</a></p>
+    </div>
+  {% endif %}
 {% endblock %}

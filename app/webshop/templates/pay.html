@@ -1,25 +1,48 @@
 {% extends "base.html" %}
 {% block title %}Pay order #{{ order.id }} — Bondom Account{% endblock %}
 {% block content %}
-  <div class="card pay-card">
-    <h1>Scan to pay — order #{{ order.id }}</h1>
-    <p class="price big">${{ amount }}</p>
-    <img class="qr" src="data:image/png;base64,{{ qr_b64 }}" alt="KHQR code">
-    <p class="hint">Open ABA, ACLEDA, Wing, Bakong or any Cambodian banking app and scan this KHQR.</p>
-    <p id="status" class="status waiting">⏳ Waiting for payment… this page updates automatically.</p>
-    <p class="hint">QR expires: <span id="expiry"></span></p>
+  <div class="pay-layout">
+    <ol class="steps" aria-label="Checkout progress">
+      <li class="done"><span class="step-dot"><svg class="ic sm" aria-hidden="true"><use href="#i-check"/></svg></span> Order created</li>
+      <li class="active" id="step-pay"><span class="step-dot">2</span> Scan &amp; pay</li>
+      <li id="step-done"><span class="step-dot">3</span> Items delivered</li>
+    </ol>
+
+    <div class="card pay-card">
+      <p class="pay-order muted">Order #{{ order.id }}</p>
+      <p class="price big">${{ amount }}</p>
+
+      <div class="qr-wrap">
+        <img class="qr" src="data:image/png;base64,{{ qr_b64 }}" alt="KHQR payment code for ${{ amount }}">
+      </div>
+
+      <p class="hint">Open <b>ABA</b>, <b>ACLEDA</b>, <b>Wing</b> or any Cambodian
+         banking app and scan this KHQR.</p>
+
+      <div id="status" class="status waiting" role="status" aria-live="polite">
+        <span class="spinner" aria-hidden="true"></span>
+        Waiting for payment — this page updates by itself
+      </div>
+
+      <div class="expiry-bar" aria-hidden="true"><div class="expiry-fill" id="expiry-fill"></div></div>
+      <p class="hint">QR expires in <span id="expiry">15m</span></p>
+    </div>
   </div>
 
   <script>
     const expiresAt = new Date("{{ expires_at }}");
+    const totalMs = 15 * 60 * 1000;
     function tick() {
-      const left = Math.max(0, Math.floor((expiresAt - Date.now()) / 1000));
+      const leftMs = Math.max(0, expiresAt - Date.now());
+      const left = Math.floor(leftMs / 1000);
       document.getElementById("expiry").textContent =
         Math.floor(left / 60) + "m " + (left % 60) + "s";
+      document.getElementById("expiry-fill").style.width =
+        Math.max(0, Math.min(100, leftMs / totalMs * 100)) + "%";
       if (left === 0) {
-        document.getElementById("status").textContent =
-          "⌛ QR expired — please create a new order.";
-        document.getElementById("status").className = "status expired";
+        const s = document.getElementById("status");
+        s.className = "status expired";
+        s.innerHTML = "⌛ QR expired — <a href='/'>create a new order</a>.";
       }
     }
     tick(); setInterval(tick, 1000);
@@ -29,9 +52,11 @@
         const r = await fetch("/web/status/{{ order.id }}");
         const data = await r.json();
         if (data.status === "paid" || data.status === "delivered") {
-          document.getElementById("status").textContent =
-            "✅ Payment received! Loading your items…";
-          document.getElementById("status").className = "status paid";
+          const s = document.getElementById("status");
+          s.className = "status paid";
+          s.innerHTML = "✅ Payment received! Loading your items…";
+          document.getElementById("step-pay").classList.add("done");
+          document.getElementById("step-done").classList.add("active");
           setTimeout(() => location.href = "/order/{{ order.id }}", 1200);
           return;
         }
@@ -39,7 +64,7 @@
           document.getElementById("status").textContent = "Order canceled.";
           return;
         }
-      } catch (e) { /* transient network error — keep polling */ }
+      } catch (e) { /* transient error — keep polling */ }
       setTimeout(poll, 4000);
     }
     poll();

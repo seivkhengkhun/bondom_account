@@ -1,48 +1,89 @@
 {% extends "base.html" %}
 {% block content %}
   <section class="hero">
-    <h1>Premium digital accounts, delivered instantly</h1>
-    <p>Pay with any Cambodian banking app via KHQR — your items arrive on this
-       site <em>and</em> in your Telegram chat the moment payment confirms.</p>
+    <h1>Premium digital accounts,<br><span class="accent">delivered in seconds</span></h1>
+    <p class="hero-sub">Scan one KHQR with any Cambodian banking app. Your items
+       arrive instantly — here and in your Telegram chat.</p>
+
+    <ul class="trust-row" role="list">
+      <li><svg class="ic" aria-hidden="true"><use href="#i-bolt"/></svg> Instant delivery</li>
+      <li><svg class="ic" aria-hidden="true"><use href="#i-qr"/></svg> KHQR — every bank</li>
+      <li><svg class="ic" aria-hidden="true"><use href="#i-shield"/></svg> Warranty included</li>
+      <li><svg class="ic tg" aria-hidden="true"><use href="#i-tg"/></svg> Synced with Telegram</li>
+    </ul>
+
     {% if not session_user %}
-      <div class="login-box">
-        <p>Sign in with Telegram to buy:</p>
+      <div class="login-box" id="signin">
+        <p>Sign in once with Telegram — your wallet and orders work on the website and in the bot.</p>
         <script async src="https://telegram.org/js/telegram-widget.js?22"
                 data-telegram-login="{{ bot_username }}"
                 data-size="large"
                 data-auth-url="{{ auth_url }}"
                 data-request-access="write"></script>
-        {% if login_failed %}<p class="error">Login failed — please try again.</p>{% endif %}
+        {% if login_failed %}<p class="alert error" role="alert">Login failed — please try again.</p>{% endif %}
       </div>
     {% endif %}
-    {% if error %}<p class="error">⚠ {{ error }}</p>{% endif %}
+    {% if error %}<p class="alert error" role="alert">⚠ {{ error }}</p>{% endif %}
   </section>
 
-  {% for category, items in grouped.items() %}
-    <section class="category">
-      <h2>📂 {{ category }}</h2>
-      <div class="grid">
+  <section aria-label="Products">
+    <div class="filter-bar" role="tablist" aria-label="Product categories">
+      <button class="pill active" data-cat="*" role="tab" aria-selected="true">
+        All <span class="pill-count">{{ grouped.values() | map('length') | sum }}</span>
+      </button>
+      {% for category, items in grouped.items() %}
+        <button class="pill" data-cat="{{ category }}" role="tab" aria-selected="false">
+          {{ category }} <span class="pill-count">{{ items | length }}</span>
+        </button>
+      {% endfor %}
+    </div>
+
+    <div class="grid" id="product-grid">
+      {% for category, items in grouped.items() %}
         {% for o in items %}
-          <a class="card product-card" href="/p/{{ o.product.id }}">
-            <h3>{{ o.product.name }}</h3>
-            <p class="price">${{ o.product.price }}</p>
-            <p class="meta">
+          <a class="card product-card" href="/p/{{ o.product.id }}" data-cat="{{ category }}">
+            <div class="pc-head">
+              <span class="chip">{{ category }}</span>
               {% if show_stock %}
                 {% if o.available > 0 %}
-                  <span class="badge ok">{{ o.available }} in stock</span>
+                  <span class="badge ok">● {{ o.available }} in stock</span>
                 {% else %}
-                  <span class="badge out">Out of stock</span>
+                  <span class="badge out">Sold out</span>
                 {% endif %}
               {% endif %}
-              {% if o.product.warranty_days %}
-                <span class="badge warranty">🛡 {{ o.product.warranty_days }}d warranty</span>
-              {% endif %}
-            </p>
+            </div>
+            <h3>{{ o.product.name }}</h3>
+            <div class="pc-foot">
+              <span class="price">${{ o.product.price }}</span>
+              <span class="pc-cta">
+                {% if o.available > 0 %}Buy <svg class="ic" aria-hidden="true"><use href="#i-cart"/></svg>{% else %}View{% endif %}
+              </span>
+            </div>
+            {% if o.product.warranty_days %}
+              <span class="badge warranty"><svg class="ic sm" aria-hidden="true"><use href="#i-shield"/></svg> {{ o.product.warranty_days }}-day warranty</span>
+            {% endif %}
           </a>
         {% endfor %}
-      </div>
-    </section>
-  {% else %}
-    <p>No products available right now — check back soon.</p>
-  {% endfor %}
+      {% endfor %}
+    </div>
+    <p class="empty-msg" id="empty-msg" hidden>No products in this category yet.</p>
+  </section>
+
+  <script>
+    const pills = document.querySelectorAll(".pill");
+    const cards = document.querySelectorAll(".product-card");
+    pills.forEach(pill => pill.addEventListener("click", () => {
+      pills.forEach(p => { p.classList.remove("active"); p.setAttribute("aria-selected", "false"); });
+      pill.classList.add("active");
+      pill.setAttribute("aria-selected", "true");
+      const cat = pill.dataset.cat;
+      let shown = 0;
+      cards.forEach(c => {
+        const show = cat === "*" || c.dataset.cat === cat;
+        c.hidden = !show;
+        if (show) shown++;
+      });
+      document.getElementById("empty-msg").hidden = shown > 0;
+    }));
+  </script>
 {% endblock %}
