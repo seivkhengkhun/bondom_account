@@ -25,9 +25,10 @@ from aiogram.types import (
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from shared import payment_service, services
+from shared import payment_service, services, sms_service
+from shared.config import settings
 from shared.database import AsyncSessionLocal
-from shared.models import Order, OrderStatus, Product
+from shared.models import Order, OrderStatus, Product, SmsOrderStatus
 from shared.schemas import OrderCreate
 
 logger = logging.getLogger(__name__)
@@ -80,16 +81,17 @@ BTN_BROWSE = "🛒 Browse Products"
 BTN_TOPUP = "💳 Top Up Wallet"
 BTN_BALANCE = "💰 My Balance"
 BTN_ORDERS = "📦 My Orders"
+BTN_SMS = "📱 SMS Numbers"
 
 
 def _main_menu() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text=BTN_BROWSE), KeyboardButton(text=BTN_TOPUP)],
-            [KeyboardButton(text=BTN_BALANCE), KeyboardButton(text=BTN_ORDERS)],
-        ],
-        resize_keyboard=True,
-    )
+    rows = [
+        [KeyboardButton(text=BTN_BROWSE), KeyboardButton(text=BTN_TOPUP)],
+        [KeyboardButton(text=BTN_BALANCE), KeyboardButton(text=BTN_ORDERS)],
+    ]
+    if settings.sms_enabled:
+        rows.append([KeyboardButton(text=BTN_SMS)])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
 async def _deny_if_permanently_blocked(
@@ -574,6 +576,267 @@ async def msg_topup_amount(message: Message, state: FSMContext) -> None:
         asyncio.create_task(payment_service.poll_wallet_topup_until_paid(topup.id)),
         f"wallet-topup:{topup.id}",
     )
+
+
+# --------------------------------------------------------------------------- #
+# SMS activation (same shared service as the website — wallet-funded)
+# --------------------------------------------------------------------------- #
+_SMS_CAT_LABEL = {"facebook": "📘 Facebook", "instagram": "📸 Instagram"}
+
+
+async def _watch_sms_and_notify(
+    bot: Bot, chat_id: int, order_id: int
+) -> None:
+    """Poll an SMS order until terminal, then message the buyer.
+
+    Reuses ``refresh_sms_order`` (which itself enforces the timeout
+    refund), so the customer is told the moment the code arrives or the
+    money is returned — even if they never tap "check".
+    """
+    import time as _time
+
+    deadline = _time.monotonic() + sms_service.WATCH_TIMEOUT_SECONDS
+    while _time.monotonic() < deadline:
+        await asyncio.sleep(sms_service.WATCH_INTERVAL_SECONDS)
+        try:
+            async with AsyncSessionLocal() as session:
+                order = await sms_service.refresh_sms_order(session, order_id)
+        except sms_service.SmsServiceError:
+            continue
+        if order is None or order.status is SmsOrderStatus.WAITING:
+            continue
+        try:
+            if order.status is SmsOrderStatus.COMPLETED:
+                await bot.send_message(
+                    chat_id,
+                    f"✅ SMS code for <code>{html.escape(order.phone)}</code>:\n\n"
+                    f"🔢 <b>{html.escape(order.otp_code)}</b>\n\n"
+                    "Tap the code to copy it.",
+                )
+            elif order.status is SmsOrderStatus.REFUNDED:
+                await bot.send_message(
+                    chat_id,
+                    f"↺ No SMS arrived for <code>{html.escape(order.phone)}</code>.\n"
+                    f"<b>${order.price:.2f}</b> was refunded to your wallet — "
+                    "you can try another number.",
+                )
+        except Exception:
+            logger.exception("Failed to notify SMS order %s", order_id)
+        return
+
+
+async def _sms_user_blocked(telegram_id: int) -> bool:
+    async with AsyncSessionLocal() as session:
+        user = await services.get_user_by_telegram_id(session, telegram_id)
+        if user is not None and await services.is_user_blocked(session, user.id):
+            return True
+    return False
+
+
+def _sms_category_menu() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=_SMS_CAT_LABEL[c], callback_data=f"smscat:{c}")]
+            for c in sms_service.CATEGORIES
+        ]
+        + [[InlineKeyboardButton(text="📜 My SMS numbers", callback_data="smsmine")]]
+    )
+
+
+@router.message(F.text == BTN_SMS)
+async def btn_sms(message: Message) -> None:
+    if message.from_user is None:
+        return
+    if not settings.sms_enabled:
+        await message.answer("SMS numbers are not available right now.")
+        return
+    async with AsyncSessionLocal() as session:
+        user = await services.get_or_create_user(
+            session, message.from_user.id, message.from_user.username
+        )
+        balance = await services.get_user_balance(session, user.id)
+    await message.answer(
+        f"📱 <b>SMS Verification Numbers</b>\n"
+        f"💰 Wallet: <b>${balance:.2f}</b>\n\n"
+        "Rent a number, receive the Facebook/Instagram code here. No code "
+        "within a few minutes = automatic refund.\n\nChoose a service:",
+        reply_markup=_sms_category_menu(),
+    )
+
+
+@router.callback_query(F.data.startswith("smscat:"))
+async def cb_sms_category(callback: CallbackQuery) -> None:
+    if callback.data is None or callback.message is None:
+        return
+    category = callback.data.split(":", 1)[1]
+    try:
+        offers = await sms_service.get_stock(category)
+    except sms_service.SmsServiceError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    if not offers:
+        await callback.answer("No countries available right now.", show_alert=True)
+        return
+
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=f"{o['flag']} {o['country']} — ${o['price']:.2f}",
+                callback_data=f"smsbuy:{category}:{o['code']}",
+            )
+        ]
+        for o in offers
+    ]
+    rows.append([InlineKeyboardButton(text="◀️ Back", callback_data="smsback")])
+    try:
+        await callback.message.edit_text(
+            f"{_SMS_CAT_LABEL.get(category, category)} — choose a country:",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+        )
+    except Exception:
+        await callback.message.answer(
+            f"{_SMS_CAT_LABEL.get(category, category)} — choose a country:",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "smsback")
+async def cb_sms_back(callback: CallbackQuery) -> None:
+    if callback.message is None:
+        return
+    try:
+        await callback.message.edit_text(
+            "Choose a service:", reply_markup=_sms_category_menu()
+        )
+    except Exception:
+        await callback.message.answer(
+            "Choose a service:", reply_markup=_sms_category_menu()
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("smsbuy:"))
+async def cb_sms_buy(callback: CallbackQuery) -> None:
+    if callback.data is None or callback.message is None or callback.from_user is None:
+        return
+    _, category, code = callback.data.split(":", 2)
+
+    if await _sms_user_blocked(callback.from_user.id):
+        await callback.answer("🚫 Permanently blocked account.", show_alert=True)
+        return
+
+    async with AsyncSessionLocal() as session:
+        user = await services.get_or_create_user(
+            session, callback.from_user.id, callback.from_user.username
+        )
+        try:
+            order = await sms_service.create_sms_order(
+                session, user.id, category, code
+            )
+        except sms_service.InsufficientBalanceError as exc:
+            await callback.answer(
+                f"Not enough balance: need ${exc.required:.2f}, you have "
+                f"${exc.balance:.2f}. Tap 💳 Top Up Wallet.",
+                show_alert=True,
+            )
+            return
+        except sms_service.SmsServiceError as exc:
+            await callback.answer(str(exc), show_alert=True)
+            return
+
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Check for code", callback_data=f"smschk:{order.id}")]
+        ]
+    )
+    await callback.message.answer(
+        f"📱 Number rented — order <b>#{order.id}</b>\n"
+        f"{_SMS_CAT_LABEL.get(category, category)} · {order.country} · "
+        f"${order.price:.2f}\n\n"
+        f"☎️ <code>{html.escape(order.phone)}</code>\n\n"
+        "Use it to request the code. It will appear here automatically; "
+        "no code within a few minutes = automatic refund.",
+        reply_markup=kb,
+    )
+    await callback.answer("Number rented ✅")
+    _track_background_task(
+        asyncio.create_task(
+            _watch_sms_and_notify(
+                callback.message.bot, callback.message.chat.id, order.id
+            )
+        ),
+        f"sms-watch:{order.id}",
+    )
+
+
+@router.callback_query(F.data.startswith("smschk:"))
+async def cb_sms_check(callback: CallbackQuery) -> None:
+    if callback.data is None or callback.from_user is None:
+        return
+    order_id = int(callback.data.split(":", 1)[1])
+
+    async with AsyncSessionLocal() as session:
+        user = await services.get_user_by_telegram_id(
+            session, callback.from_user.id
+        )
+        order = await session.get(sms_service.SmsOrder, order_id)
+        if order is None or user is None or order.user_id != user.id:
+            await callback.answer("Order not found.", show_alert=True)
+            return
+        try:
+            order = await sms_service.refresh_sms_order(session, order_id)
+        except sms_service.SmsServiceError:
+            pass
+
+    if order.status is SmsOrderStatus.COMPLETED:
+        await callback.answer(f"Code: {order.otp_code}", show_alert=True)
+    elif order.status is SmsOrderStatus.REFUNDED:
+        await callback.answer(
+            f"No SMS — ${order.price:.2f} refunded to your wallet.",
+            show_alert=True,
+        )
+    else:
+        await callback.answer(
+            "No code yet — give it a few seconds and try again.",
+            show_alert=True,
+        )
+
+
+@router.callback_query(F.data == "smsmine")
+async def cb_sms_mine(callback: CallbackQuery) -> None:
+    if callback.from_user is None or callback.message is None:
+        return
+    async with AsyncSessionLocal() as session:
+        user = await services.get_user_by_telegram_id(
+            session, callback.from_user.id
+        )
+        orders = (
+            await sms_service.list_user_sms_orders(session, user.id, limit=10)
+            if user else []
+        )
+    if not orders:
+        await callback.answer("You have no SMS numbers yet.", show_alert=True)
+        return
+    lines = ["📜 <b>Your SMS numbers</b>", ""]
+    emoji = {
+        SmsOrderStatus.COMPLETED: "✅",
+        SmsOrderStatus.WAITING: "⏳",
+        SmsOrderStatus.REFUNDED: "↺",
+        SmsOrderStatus.FAILED: "❌",
+    }
+    for o in orders:
+        tail = (
+            f"code <b>{html.escape(o.otp_code)}</b>"
+            if o.status is SmsOrderStatus.COMPLETED
+            else ("refunded" if o.status is SmsOrderStatus.REFUNDED else o.status.value)
+        )
+        lines.append(
+            f"{emoji.get(o.status, '•')} <code>{html.escape(o.phone or '—')}</code> "
+            f"· {o.country} · ${o.price:.2f} · {tail}"
+        )
+    await callback.message.answer("\n".join(lines))
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("tchk:"))
