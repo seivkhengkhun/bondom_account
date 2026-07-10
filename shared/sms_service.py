@@ -513,6 +513,70 @@ async def sweep_waiting_orders() -> None:
         await asyncio.sleep(60)
 
 
+RATE_WINDOW = 20  # judge a country on its last N rentals
+
+
+async def country_recent_stats(
+    session: AsyncSession, category: str, country_code: str, window: int = RATE_WINDOW
+) -> tuple[int, int]:
+    """(#codes delivered, #resolved) over the last ``window`` rentals of a
+    country. Only terminal orders count — a waiting order isn't a verdict yet."""
+    async with transaction_scope(session):
+        rows = list(
+            await session.scalars(
+                select(SmsOrder.status)
+                .where(
+                    SmsOrder.category == category,
+                    SmsOrder.country_code == country_code.upper(),
+                    SmsOrder.status != SmsOrderStatus.WAITING,
+                )
+                .order_by(SmsOrder.created_at.desc(), SmsOrder.id.desc())
+                .limit(window)
+            )
+        )
+    total = len(rows)
+    completed = sum(1 for s in rows if s == SmsOrderStatus.COMPLETED)
+    return completed, total
+
+
+async def get_stock_ranked(category: str) -> list[dict]:
+    """Stock ordered best-delivering first, using OUR recent success rate.
+
+    Each offer gains: ``recent_completed``, ``recent_total``,
+    ``success_rate`` (0..1 or None if unproven) and ``cold`` (True when the
+    last RATE_WINDOW rentals ALL failed to deliver — deprioritized so
+    customers aren't steered to a number that isn't sending codes).
+    """
+    offers = await get_stock(category)
+    async with AsyncSessionLocal() as session:
+        for o in offers:
+            done, total = await country_recent_stats(session, category, o["code"])
+            o["recent_completed"] = done
+            o["recent_total"] = total
+            o["success_rate"] = (done / total) if total else None
+            o["cold"] = total >= RATE_WINDOW and done == 0
+
+    def _key(o: dict):
+        # cold last; then higher success first (unproven = neutral 0.5);
+        # then cheaper first.
+        rate = o["success_rate"] if o["success_rate"] is not None else 0.5
+        return (o["cold"], -rate, float(o["price"]))
+
+    offers.sort(key=_key)
+    return offers
+
+
+def rate_label(offer: dict) -> str:
+    """Short human badge for an offer's delivery reliability."""
+    if offer.get("cold"):
+        return "⚠ low delivery"
+    total = offer.get("recent_total") or 0
+    if total < 3:
+        return "🆕 new"
+    pct = round((offer.get("success_rate") or 0) * 100)
+    return f"✅ {pct}% delivered"
+
+
 async def list_user_sms_orders(
     session: AsyncSession, user_id: int, limit: int = 20
 ) -> list[SmsOrder]:

@@ -445,7 +445,8 @@ async def sms_page(request: Request):
     stock_error = ""
     for category in sms_service.CATEGORIES:
         try:
-            stock[category] = await sms_service.get_stock(category)
+            # Ranked best-delivering first, with recent success-rate badges.
+            stock[category] = await sms_service.get_stock_ranked(category)
         except sms_service.SmsServiceError as exc:
             stock[category] = []
             stock_error = str(exc)

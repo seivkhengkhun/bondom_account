@@ -584,45 +584,91 @@ async def msg_topup_amount(message: Message, state: FSMContext) -> None:
 _SMS_CAT_LABEL = {"facebook": "📘 Facebook", "instagram": "📸 Instagram"}
 
 
-async def _watch_sms_and_notify(
-    bot: Bot, chat_id: int, order_id: int
-) -> None:
-    """Poll an SMS order until terminal, then message the buyer.
+_SMS_SPINNER = ["◐", "◓", "◑", "◒"]
+_SMS_WAIT_BAR = 12  # progress-bar cells
 
-    Reuses ``refresh_sms_order`` (which itself enforces the timeout
-    refund), so the customer is told the moment the code arrives or the
-    money is returned — even if they never tap "check".
+
+def _sms_progress_bar(elapsed: float, total: float) -> str:
+    filled = min(_SMS_WAIT_BAR, int(_SMS_WAIT_BAR * elapsed / total)) if total else 0
+    return "▰" * filled + "▱" * (_SMS_WAIT_BAR - filled)
+
+
+def _sms_waiting_text(order, phone: str, frame: int, elapsed: float) -> str:
+    remain = max(0, sms_service.SMS_ORDER_TTL_SECONDS - elapsed)
+    mm, ss = divmod(int(remain), 60)
+    spin = _SMS_SPINNER[frame % len(_SMS_SPINNER)]
+    bar = _sms_progress_bar(elapsed, sms_service.SMS_ORDER_TTL_SECONDS)
+    return (
+        f"📱 Order <b>#{order.id}</b> · {order.country} · ${order.price:.2f}\n\n"
+        f"☎️ <code>{html.escape(phone)}</code>\n\n"
+        f"{spin} <b>Waiting for SMS code…</b>\n"
+        f"{bar}\n"
+        f"⏱ Auto-refund in <b>{mm}:{ss:02d}</b> if no code arrives."
+    )
+
+
+async def _watch_sms_and_notify(
+    bot: Bot, chat_id: int, message_id: int, order_id: int, phone: str
+) -> None:
+    """Live-animate the waiting message, then settle it in place.
+
+    Edits the same message on a cadence (spinner + progress bar +
+    auto-refund countdown) so the customer can watch progress, and swaps
+    it to the code or the refund the instant the order resolves. Reuses
+    ``refresh_sms_order`` (which enforces the timeout refund).
     """
     import time as _time
 
-    deadline = _time.monotonic() + sms_service.WATCH_TIMEOUT_SECONDS
+    start = _time.monotonic()
+    deadline = start + sms_service.WATCH_TIMEOUT_SECONDS
+    frame = 0
     while _time.monotonic() < deadline:
-        await asyncio.sleep(sms_service.WATCH_INTERVAL_SECONDS)
+        await asyncio.sleep(3)
+        frame += 1
         try:
             async with AsyncSessionLocal() as session:
                 order = await sms_service.refresh_sms_order(session, order_id)
         except sms_service.SmsServiceError:
-            continue
-        if order is None or order.status is SmsOrderStatus.WAITING:
-            continue
+            order = None
+
+        if order is not None and order.status is not SmsOrderStatus.WAITING:
+            try:
+                if order.status is SmsOrderStatus.COMPLETED:
+                    await bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=message_id,
+                        text=(
+                            f"✅ <b>Code received</b> · order #{order.id}\n"
+                            f"☎️ <code>{html.escape(phone)}</code>\n\n"
+                            f"🔢 <b>{html.escape(order.otp_code)}</b>\n\n"
+                            "Tap the code above to copy it."
+                        ),
+                    )
+                else:  # REFUNDED / FAILED
+                    await bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=message_id,
+                        text=(
+                            f"↺ <b>Refunded</b> · order #{order.id}\n"
+                            f"☎️ <code>{html.escape(phone)}</code>\n\n"
+                            f"No SMS arrived — <b>${order.price:.2f}</b> was "
+                            "returned to your wallet. Try another number."
+                        ),
+                    )
+            except Exception:
+                logger.exception("Failed to settle SMS message %s", order_id)
+            return
+
+        # still waiting — animate the frame
         try:
-            if order.status is SmsOrderStatus.COMPLETED:
-                await bot.send_message(
-                    chat_id,
-                    f"✅ SMS code for <code>{html.escape(order.phone)}</code>:\n\n"
-                    f"🔢 <b>{html.escape(order.otp_code)}</b>\n\n"
-                    "Tap the code to copy it.",
-                )
-            elif order.status is SmsOrderStatus.REFUNDED:
-                await bot.send_message(
-                    chat_id,
-                    f"↺ No SMS arrived for <code>{html.escape(order.phone)}</code>.\n"
-                    f"<b>${order.price:.2f}</b> was refunded to your wallet — "
-                    "you can try another number.",
-                )
+            elapsed = _time.monotonic() - start
+            await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=_sms_waiting_text(order, phone, frame, elapsed),
+            )
         except Exception:
-            logger.exception("Failed to notify SMS order %s", order_id)
-        return
+            pass  # "message is not modified" / transient edit errors
 
 
 async def _sms_user_blocked(telegram_id: int) -> bool:
@@ -670,7 +716,7 @@ async def cb_sms_category(callback: CallbackQuery) -> None:
         return
     category = callback.data.split(":", 1)[1]
     try:
-        offers = await sms_service.get_stock(category)
+        offers = await sms_service.get_stock_ranked(category)
     except sms_service.SmsServiceError as exc:
         await callback.answer(str(exc), show_alert=True)
         return
@@ -678,10 +724,14 @@ async def cb_sms_category(callback: CallbackQuery) -> None:
         await callback.answer("No countries available right now.", show_alert=True)
         return
 
+    # Best-delivering numbers first, each tagged with its recent rate.
     rows = [
         [
             InlineKeyboardButton(
-                text=f"{o['flag']} {o['country']} — ${o['price']:.2f}",
+                text=(
+                    f"{o['flag']} {o['country']} — ${o['price']:.2f}  "
+                    f"{sms_service.rate_label(o)}"
+                ),
                 callback_data=f"smsbuy:{category}:{o['code']}",
             )
         ]
@@ -745,25 +795,18 @@ async def cb_sms_buy(callback: CallbackQuery) -> None:
             await callback.answer(str(exc), show_alert=True)
             return
 
-    kb = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="🔄 Check for code", callback_data=f"smschk:{order.id}")]
-        ]
-    )
-    await callback.message.answer(
-        f"📱 Number rented — order <b>#{order.id}</b>\n"
-        f"{_SMS_CAT_LABEL.get(category, category)} · {order.country} · "
-        f"${order.price:.2f}\n\n"
-        f"☎️ <code>{html.escape(order.phone)}</code>\n\n"
-        "Use it to request the code. It will appear here automatically; "
-        "no code within a few minutes = automatic refund.",
-        reply_markup=kb,
+    sent = await callback.message.answer(
+        _sms_waiting_text(order, order.phone, 0, 0.0),
     )
     await callback.answer("Number rented ✅")
     _track_background_task(
         asyncio.create_task(
             _watch_sms_and_notify(
-                callback.message.bot, callback.message.chat.id, order.id
+                callback.message.bot,
+                callback.message.chat.id,
+                sent.message_id,
+                order.id,
+                order.phone,
             )
         ),
         f"sms-watch:{order.id}",

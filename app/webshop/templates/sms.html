@@ -51,6 +51,13 @@
               <span class="sms-svc-tag {{ category }}">
                 {% if category == "facebook" %}Facebook{% else %}Instagram{% endif %}
               </span>
+              {% if offer.cold %}
+                <span class="badge out" style="margin-top:.3rem">⚠ Low delivery</span>
+              {% elif offer.recent_total and offer.recent_total >= 3 %}
+                <span class="badge ok" style="margin-top:.3rem">✅ {{ (offer.success_rate * 100) | round | int }}% delivered</span>
+              {% else %}
+                <span class="badge warn" style="margin-top:.3rem">🆕 New</span>
+              {% endif %}
             </div>
           </div>
           <div class="sms-offer-bottom">
