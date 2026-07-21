@@ -16,6 +16,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from shared.models import (
+    AgencyEarning,
+    AgencyEarningStatus,
     AppSetting,
     Inventory,
     InventoryStatus,
@@ -413,10 +415,17 @@ async def delete_product(session: AsyncSession, product_id: int) -> None:
 BOT_SHOW_STOCK_KEY = "bot_show_stock"
 PRODUCT_NOTE_KEY_PREFIX = "product_note:"
 USER_BALANCE_KEY_PREFIX = "user_balance:"
+COMMISSION_RATE_KEY = "commission_rate"
+AGENCY_BALANCE_KEY_PREFIX = "agency_earnings:"
+DEFAULT_COMMISSION_RATE = Decimal("0.05")
 
 
 def _user_balance_key(user_id: int) -> str:
     return f"{USER_BALANCE_KEY_PREFIX}{user_id}"
+
+
+def _agency_balance_key(user_id: int) -> str:
+    return f"{AGENCY_BALANCE_KEY_PREFIX}{user_id}"
 
 
 def _to_money(value: Decimal) -> Decimal:
@@ -488,6 +497,151 @@ async def adjust_user_balance(
     if delta > 0:
         return await add_user_balance(session, user_id, delta)
     return await spend_user_balance(session, user_id, abs(delta))
+
+
+# --------------------------------------------------------------------------- #
+# Marketplace: commission rate, agency earnings balance, per-order split
+# --------------------------------------------------------------------------- #
+async def get_commission_rate(session: AsyncSession) -> Decimal:
+    """Platform commission fraction (e.g. 0.05 = 5%). DB overrides default."""
+    async with transaction_scope(session):
+        row = await session.get(AppSetting, COMMISSION_RATE_KEY)
+    if row is None:
+        return DEFAULT_COMMISSION_RATE
+    try:
+        rate = Decimal(row.value)
+    except Exception:
+        return DEFAULT_COMMISSION_RATE
+    return rate if Decimal("0") <= rate < Decimal("1") else DEFAULT_COMMISSION_RATE
+
+
+async def set_commission_rate(session: AsyncSession, rate: Decimal) -> Decimal:
+    """Persist the platform commission fraction (0 ≤ rate < 1)."""
+    if not (Decimal("0") <= rate < Decimal("1")):
+        raise ServiceError("Commission rate must be between 0 and 1 (e.g. 0.05)")
+    value = rate.quantize(Decimal("0.0001"))
+    async with transaction_scope(session):
+        row = await session.get(AppSetting, COMMISSION_RATE_KEY)
+        if row is None:
+            session.add(AppSetting(key=COMMISSION_RATE_KEY, value=str(value)))
+        else:
+            row.value = str(value)
+    return value
+
+
+async def get_agency_balance(session: AsyncSession, user_id: int) -> Decimal:
+    """Withdrawable earnings balance for an agency (USD)."""
+    async with transaction_scope(session):
+        row = await session.get(AppSetting, _agency_balance_key(user_id))
+        if row is None:
+            return Decimal("0.00")
+        try:
+            return _to_money(Decimal(row.value))
+        except Exception:
+            return Decimal("0.00")
+
+
+async def _add_agency_balance(
+    session: AsyncSession, user_id: int, amount: Decimal
+) -> Decimal:
+    async with transaction_scope(session):
+        key = _agency_balance_key(user_id)
+        row = await session.get(AppSetting, key)
+        current = Decimal("0.00") if row is None else Decimal(row.value)
+        updated = _to_money(current + amount)
+        if row is None:
+            session.add(AppSetting(key=key, value=str(updated)))
+        else:
+            row.value = str(updated)
+        return updated
+
+
+async def _order_seller_id(session: AsyncSession, order: Order) -> int | None:
+    """The agency that owns the order's product, or None for house products."""
+    async with transaction_scope(session):
+        item = await session.scalar(
+            select(Inventory).where(Inventory.assigned_order_id == order.id).limit(1)
+        )
+        if item is None:
+            return None
+        product = await session.get(Product, item.product_id)
+    if product is None or product.owner_id is None:
+        return None
+    return product.owner_id
+
+
+async def record_order_earning(
+    session: AsyncSession, order_id: int
+) -> AgencyEarning | None:
+    """Record the commission split for a delivered agency order.
+
+    House products (no owner) record nothing — the platform keeps 100%.
+    Idempotent: one earning row per order; a second call is a no-op.
+    Credits the agency's withdrawable earnings balance with the net.
+    """
+    async with transaction_scope(session):
+        existing = await session.scalar(
+            select(AgencyEarning).where(AgencyEarning.order_id == order_id)
+        )
+        if existing is not None:
+            return existing
+        order = await session.get(Order, order_id)
+        if order is None:
+            return None
+
+    seller_id = await _order_seller_id(session, order)
+    if seller_id is None:
+        return None
+
+    rate = await get_commission_rate(session)
+    gross = _to_money(order.total_price)
+    commission = _to_money(gross * rate)
+    net = _to_money(gross - commission)
+
+    async with transaction_scope(session):
+        # Re-check inside the write txn to keep idempotency under races.
+        existing = await session.scalar(
+            select(AgencyEarning).where(AgencyEarning.order_id == order_id)
+        )
+        if existing is not None:
+            return existing
+        earning = AgencyEarning(
+            order_id=order_id,
+            seller_id=seller_id,
+            gross=gross,
+            commission_rate=rate,
+            commission_amount=commission,
+            net=net,
+            status=AgencyEarningStatus.EARNED,
+        )
+        session.add(earning)
+    await _add_agency_balance(session, seller_id, net)
+    return earning
+
+
+async def reverse_order_earning(session: AsyncSession, order_id: int) -> bool:
+    """Reverse an earning if its order is refunded/canceled. Debits the
+    agency's earnings balance (never below zero). Idempotent."""
+    async with transaction_scope(session):
+        earning = await session.scalar(
+            select(AgencyEarning).where(AgencyEarning.order_id == order_id)
+        )
+        if earning is None or earning.status is AgencyEarningStatus.REVERSED:
+            return False
+        earning.status = AgencyEarningStatus.REVERSED
+        seller_id = earning.seller_id
+        net = earning.net
+
+    async with transaction_scope(session):
+        key = _agency_balance_key(seller_id)
+        row = await session.get(AppSetting, key)
+        current = Decimal("0.00") if row is None else Decimal(row.value)
+        updated = _to_money(max(Decimal("0.00"), current - net))
+        if row is None:
+            session.add(AppSetting(key=key, value=str(updated)))
+        else:
+            row.value = str(updated)
+    return True
 
 
 async def get_bot_show_stock(session: AsyncSession) -> bool:
@@ -763,6 +917,8 @@ async def mark_order_delivered(session: AsyncSession, order_id: int) -> Order:
         if order is None:
             raise OrderNotFoundError(order_id)
         order.status = OrderStatus.DELIVERED
+    # Settle the marketplace commission split (no-op for house products).
+    await record_order_earning(session, order_id)
     return order
 
 
@@ -789,6 +945,10 @@ async def cancel_order_and_release_inventory(
             item.assigned_order_id = None
         order.status = OrderStatus.CANCELED
         await session.flush()
+    # If this order had already earned commission, reverse it (defensive —
+    # today only PENDING orders cancel, but keeps the ledger correct if a
+    # post-delivery refund path is added later).
+    await reverse_order_earning(session, order_id)
     return order
 
 

@@ -65,7 +65,42 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
         yield session
 
 
+# Additive columns added to already-existing tables after their initial
+# release. ``create_all`` creates missing TABLES but never alters existing
+# ones, so these are applied with ADD COLUMN (ignoring "already exists").
+# SQLite and Postgres both accept this idempotent pattern.
+_ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
+    # (table, column, type)
+    ("users", "is_agency", "BOOLEAN DEFAULT 0"),
+    ("users", "agency_name", "VARCHAR(128)"),
+    ("users", "agency_status", "VARCHAR(20)"),
+    ("users", "payout_contact", "VARCHAR(255)"),
+    ("products", "owner_id", "INTEGER"),
+]
+
+
+async def _apply_additive_columns(conn) -> None:
+    from sqlalchemy import text
+
+    for table, column, coltype in _ADDITIVE_COLUMNS:
+        try:
+            await conn.exec_driver_sql(
+                f"ALTER TABLE {table} ADD COLUMN {column} {coltype}"
+            )
+        except Exception:
+            # Column already exists (or table not yet present) — safe to skip.
+            pass
+    # Ensure the text import above isn't flagged unused on some linters.
+    _ = text
+
+
 async def init_db() -> None:
-    """Create all tables. Dev convenience — use Alembic in production."""
+    """Create all tables + apply additive columns. Dev convenience.
+
+    New tables are created by ``create_all``; columns added to
+    pre-existing tables are applied idempotently so a running production
+    database upgrades in place without a separate migration step.
+    """
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await _apply_additive_columns(conn)

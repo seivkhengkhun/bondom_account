@@ -68,6 +68,13 @@ class User(Base):
         DateTime(timezone=True), server_default=func.now()
     )
 
+    # Marketplace: a user may also be a selling agency (admin-approved).
+    is_agency: Mapped[bool] = mapped_column(Boolean, default=False)
+    agency_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # agency_status: None | "pending" | "approved" | "suspended"
+    agency_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    payout_contact: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
     orders: Mapped[list["Order"]] = relationship(back_populates="user")
     topups: Mapped[list["WalletTopup"]] = relationship(back_populates="user")
 
@@ -81,6 +88,11 @@ class Product(Base):
     category: Mapped[str] = mapped_column(String(100), index=True)
     warranty_days: Mapped[int] = mapped_column(Integer, default=0)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Marketplace: NULL = house product (platform keeps 100%); set = the
+    # agency (user id) that sells it and earns net-of-commission.
+    owner_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
 
     inventory_items: Mapped[list["Inventory"]] = relationship(
         back_populates="product"
@@ -270,4 +282,44 @@ class SmsOrder(Base):
     )
     last_checked_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+
+
+class AgencyEarningStatus(str, enum.Enum):
+    EARNED = "earned"
+    REVERSED = "reversed"
+
+
+class AgencyEarning(Base):
+    """Commission split recorded when an agency's order is delivered.
+
+    ``gross`` is what the buyer paid; ``net`` is the agency's take after the
+    platform's ``commission_amount``. One row per order (unique). Reversed
+    (status flipped, balance debited) if the order is ever refunded.
+    """
+
+    __tablename__ = "agency_earnings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    order_id: Mapped[int] = mapped_column(
+        ForeignKey("orders.id", ondelete="CASCADE"), unique=True, index=True
+    )
+    seller_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), index=True
+    )
+    gross: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+    commission_rate: Mapped[Decimal] = mapped_column(Numeric(5, 4))
+    commission_amount: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+    net: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+    status: Mapped[AgencyEarningStatus] = mapped_column(
+        Enum(
+            AgencyEarningStatus,
+            name="agency_earning_status",
+            values_callable=lambda e: [m.value for m in e],
+        ),
+        default=AgencyEarningStatus.EARNED,
+        index=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
     )
