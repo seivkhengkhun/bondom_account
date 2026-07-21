@@ -637,3 +637,31 @@ a:hover { color: #818cf8; }
   .refund-actions { flex-direction: column; }
   .refund-actions .btn { width: 100%; }
 }
+
+/* ------------------------------------------------------------ marketplace */
+.sold-by { font-size: 0.78rem; color: var(--accent); font-weight: 600; }
+
+.seller-new-grid {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr 1fr auto;
+  gap: 0.7rem; align-items: end;
+}
+.seller-new-grid label { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.82rem; color: var(--muted); }
+.seller-new-grid input {
+  padding: 0.5rem 0.7rem; background: var(--surface-2);
+  border: 1px solid var(--border-strong); border-radius: 10px;
+  color: var(--text); font-size: 0.95rem;
+}
+.seller-prod-head { display: flex; justify-content: space-between; gap: 1rem; flex-wrap: wrap; align-items: start; }
+.seller-prod-stats { display: flex; gap: 0.4rem; flex-wrap: wrap; align-items: center; }
+.seller-actions { margin-top: 0.8rem; }
+.seller-actions summary { cursor: pointer; color: var(--accent); font-size: 0.9rem; font-weight: 600; }
+.seller-actions-body { margin-top: 0.7rem; display: grid; gap: 0.7rem; }
+.seller-inline { display: grid; gap: 0.5rem; }
+.seller-inline-row { display: flex; gap: 0.6rem; flex-wrap: wrap; align-items: center; }
+.seller-inline-h { display: flex; gap: 0.5rem; align-items: center; }
+
+@media (max-width: 640px) {
+  .seller-new-grid { grid-template-columns: 1fr 1fr; }
+  .seller-new-grid button { grid-column: 1 / -1; }
+}

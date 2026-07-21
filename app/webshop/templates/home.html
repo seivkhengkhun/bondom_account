@@ -53,6 +53,9 @@
               {% endif %}
             </div>
             <h3>{{ o.product.name }}</h3>
+            {% if sellers and sellers.get(o.product.id) %}
+              <span class="sold-by">🏪 {{ sellers.get(o.product.id) }}</span>
+            {% endif %}
             <div class="pc-foot">
               <span class="price">${{ o.product.price }}</span>
               <span class="pc-cta">

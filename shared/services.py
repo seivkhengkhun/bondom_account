@@ -243,9 +243,19 @@ async def list_active_telegram_ids(session: AsyncSession) -> list[int]:
 # --------------------------------------------------------------------------- #
 # Products
 # --------------------------------------------------------------------------- #
-async def create_product(session: AsyncSession, payload: ProductCreate) -> Product:
-    """Persist a new product and return it."""
+async def create_product(
+    session: AsyncSession,
+    payload: ProductCreate,
+    owner_id: int | None = None,
+) -> Product:
+    """Persist a new product and return it.
+
+    ``owner_id`` set = an agency's product (marketplace); None = house
+    product owned by the platform.
+    """
     product = Product(**payload.model_dump())
+    if owner_id is not None:
+        product.owner_id = owner_id
     async with transaction_scope(session):
         session.add(product)
     return product
@@ -1184,3 +1194,96 @@ async def marketplace_totals(session: AsyncSession) -> dict:
         "pending_agencies": int(pending or 0),
         "approved_agencies": int(approved or 0),
     }
+
+
+# --------------------------------------------------------------------------- #
+# Marketplace: agency-scoped product management (agencies touch only their own)
+# --------------------------------------------------------------------------- #
+class AgencyProductError(ServiceError):
+    """Raised when an agency acts on a product it does not own."""
+
+
+async def _assert_agency_owns(
+    session: AsyncSession, owner_id: int, product_id: int
+) -> Product:
+    async with transaction_scope(session):
+        product = await session.get(Product, product_id)
+    if product is None:
+        raise ProductNotFoundError(product_id)
+    if product.owner_id != owner_id:
+        raise AgencyProductError("This product does not belong to you")
+    return product
+
+
+async def list_agency_product_overviews(
+    session: AsyncSession, owner_id: int
+) -> list[ProductOverview]:
+    """Per-product stock/sales overview scoped to one agency's products."""
+    available = func.count(Inventory.id).filter(
+        Inventory.status == InventoryStatus.AVAILABLE
+    )
+    sold = func.count(Inventory.id).filter(
+        Inventory.status == InventoryStatus.SOLD
+    )
+    stmt = (
+        select(Product, available, sold)
+        .outerjoin(Inventory, Inventory.product_id == Product.id)
+        .where(Product.owner_id == owner_id)
+        .group_by(Product.id)
+        .order_by(Product.id.desc())
+    )
+    async with transaction_scope(session):
+        rows = (await session.execute(stmt)).all()
+    return [
+        ProductOverview(
+            product=product,
+            available=int(avail),
+            sold=int(nsold),
+            revenue=product.price * nsold,
+        )
+        for product, avail, nsold in rows
+    ]
+
+
+async def create_agency_product(
+    session: AsyncSession, owner_id: int, payload: ProductCreate
+) -> Product:
+    """Publish a product on behalf of an approved agency."""
+    if not await is_approved_agency(session, owner_id):
+        raise AgencyProductError("Your agency is not approved to sell")
+    return await create_product(session, payload, owner_id=owner_id)
+
+
+async def agency_add_inventory(
+    session: AsyncSession, owner_id: int, product_id: int, items: list[str]
+) -> InventoryImportResult:
+    """Add stock to the agency's OWN product (ownership enforced)."""
+    await _assert_agency_owns(session, owner_id, product_id)
+    return await bulk_add_inventory_with_report(session, product_id, items)
+
+
+async def agency_update_price(
+    session: AsyncSession, owner_id: int, product_id: int, price: Decimal
+) -> Product:
+    await _assert_agency_owns(session, owner_id, product_id)
+    return await update_product_price(session, product_id, price)
+
+
+async def agency_set_active(
+    session: AsyncSession, owner_id: int, product_id: int, is_active: bool
+) -> Product:
+    await _assert_agency_owns(session, owner_id, product_id)
+    return await set_product_active(session, product_id, is_active)
+
+
+async def get_product_owner_name(
+    session: AsyncSession, product: Product
+) -> str | None:
+    """Display name of a product's selling agency, or None for house."""
+    if product.owner_id is None:
+        return None
+    async with transaction_scope(session):
+        owner = await session.get(User, product.owner_id)
+    if owner is None or owner.agency_status != "approved":
+        return None
+    return owner.agency_name or None

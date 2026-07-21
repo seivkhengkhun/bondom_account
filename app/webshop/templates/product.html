@@ -11,6 +11,9 @@
     <section class="card product-info">
       <span class="chip">{{ o.product.category }}</span>
       <h1>{{ o.product.name }}</h1>
+      {% if seller_name %}
+        <p class="sold-by" style="margin:.2rem 0 .5rem">🏪 Sold by <b>{{ seller_name }}</b></p>
+      {% endif %}
       <div class="meta">
         {% if show_stock %}
           {% if o.available > 0 %}

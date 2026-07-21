@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}My Products — Seller — Bondom Account{% endblock %}
+{% block content %}
+  <div class="page-head">
+    <h1>🏪 My Products</h1>
+    <div class="head-actions">
+      <span class="wallet-chip">💰 Earnings ${{ balance }}</span>
+      <a class="btn btn-ghost btn-sm" href="/seller">Seller home</a>
+    </div>
+  </div>
+  <p class="muted" style="margin-bottom:1rem">
+    You keep <b>{{ keep_pct }}%</b> of every sale (platform commission {{ commission_pct }}%).
+    The platform handles payment &amp; delivery — just publish and stock.</p>
+
+  {% if success %}<p class="alert" style="background:var(--green-soft);border:1px solid rgba(52,211,153,.3);color:var(--green)" role="status">✅ {{ success }}</p>{% endif %}
+  {% if error %}<p class="alert error" role="alert">⚠ {{ error }}</p>{% endif %}
+
+  {# ---- Publish a new product ---- #}
+  <div class="card" style="margin-bottom:1.2rem">
+    <h2 style="font-size:1.1rem;margin-bottom:.7rem">➕ Publish a product</h2>
+    <form method="post" action="/seller/products/new" class="seller-new-grid">
+      <label>Name<input type="text" name="name" required maxlength="255" placeholder="e.g. Netflix 1 Month"></label>
+      <label>Price (USD)<input type="number" name="price" step="0.01" min="0" required placeholder="0.00"></label>
+      <label>Category<input type="text" name="category" required placeholder="accounts"></label>
+      <label>Warranty (days)<input type="number" name="warranty_days" min="0" value="0"></label>
+      <button type="submit" class="btn btn-primary">Publish</button>
+    </form>
+  </div>
+
+  {# ---- Existing products ---- #}
+  {% if overviews %}
+    <div class="orders-list">
+      {% for o in overviews %}
+        <div class="card">
+          <div class="seller-prod-head">
+            <div>
+              <h3 style="font-size:1.05rem">{{ o.product.name }}
+                {% if not o.product.is_active %}<span class="badge out">hidden</span>{% endif %}
+              </h3>
+              <span class="muted" style="font-size:.84rem">
+                {{ o.product.category }} · ${{ "%.2f" | format(o.product.price) }}
+                {% if o.product.warranty_days %} · 🛡 {{ o.product.warranty_days }}d{% endif %}
+              </span>
+            </div>
+            <div class="seller-prod-stats">
+              <span class="badge {% if o.available > 0 %}ok{% else %}out{% endif %}">{{ o.available }} in stock</span>
+              <span class="badge">{{ o.sold }} sold</span>
+              <span class="badge ok">${{ "%.2f" | format(o.revenue) }} sales</span>
+            </div>
+          </div>
+
+          <details class="seller-actions">
+            <summary>Manage</summary>
+            <div class="seller-actions-body">
+              <form method="post" action="/seller/products/{{ o.product.id }}/stock" class="seller-inline">
+                <textarea name="lines" rows="3" placeholder="Add stock — one credential/key per line" required
+                  style="width:100%;background:var(--surface-2);border:1px solid var(--border-strong);border-radius:10px;color:var(--text);padding:.5rem;font-size:.9rem"></textarea>
+                <button type="submit" class="btn btn-primary btn-sm">Add stock</button>
+              </form>
+              <div class="seller-inline-row">
+                <form method="post" action="/seller/products/{{ o.product.id }}/price" class="seller-inline-h">
+                  <input type="number" name="price" step="0.01" min="0" value="{{ '%.2f' | format(o.product.price) }}"
+                    style="width:7em;background:var(--surface-2);border:1px solid var(--border-strong);border-radius:8px;color:var(--text);padding:.4rem">
+                  <button type="submit" class="btn btn-ghost btn-sm">Update price</button>
+                </form>
+                <form method="post" action="/seller/products/{{ o.product.id }}/toggle">
+                  <input type="hidden" name="active" value="{% if o.product.is_active %}0{% else %}1{% endif %}">
+                  <button type="submit" class="btn btn-ghost btn-sm">
+                    {% if o.product.is_active %}Hide{% else %}Show{% endif %}
+                  </button>
+                </form>
+              </div>
+            </div>
+          </details>
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="card center-card">
+      <p class="empty-emoji" aria-hidden="true">📦</p>
+      <h2>No products yet</h2>
+      <p class="muted">Publish your first product above to start selling.</p>
+    </div>
+  {% endif %}
+{% endblock %}

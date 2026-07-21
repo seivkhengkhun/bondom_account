@@ -14,8 +14,11 @@
           <div><dt>Earnings balance</dt><dd class="refund-amt">${{ balance }}</dd></div>
           <div><dt>Platform commission</dt><dd>{{ commission_pct }}% per order</dd></div>
         </div>
-        <p class="hint">Product publishing &amp; payouts are coming to your seller
-          dashboard next. Your earnings are already being tracked on every delivered order.</p>
+        <a class="btn btn-primary btn-lg btn-block" href="/seller/products" style="margin-top:1rem">
+          📦 Manage my products
+        </a>
+        <p class="hint">Publish products, upload stock, and track sales. Payouts
+          of your earnings balance come next.</p>
       </div>
 
     {% elif status == "pending" %}
