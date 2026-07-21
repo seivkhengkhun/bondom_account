@@ -70,6 +70,20 @@ class UserRow:
 
 
 @dataclasses.dataclass
+class AgencyRow:
+    id: int
+    name: str
+    username: str
+    status: str
+    orders: int
+    gross: str
+    commission: str
+    net: str
+    balance: str
+    payout_contact: str
+
+
+@dataclasses.dataclass
 class SmsRow:
     id: int
     user: str
@@ -102,6 +116,16 @@ class AdminState(rx.State):
     orders: list[OrderRow] = []
     users: list[UserRow] = []
     sms_orders: list[SmsRow] = []
+    agencies: list[AgencyRow] = []
+
+    # Marketplace
+    commission_pct: str = "5"
+    commission_message: str = ""
+    mkt_gross: str = "0.00"
+    mkt_commission: str = "0.00"
+    mkt_net: str = "0.00"
+    mkt_pending: int = 0
+    mkt_approved: int = 0
 
     # SMS activation
     sms_markup: str = "0.03"
@@ -345,6 +369,75 @@ class AdminState(rx.State):
                 row.balance = f"{(await services.get_user_balance(session, row.id)):.2f}"
 
         await self._load_sms()
+        await self._load_marketplace()
+
+    async def _load_marketplace(self) -> None:
+        async with AsyncSessionLocal() as session:
+            rows = await services.list_agencies(session)
+            totals = await services.marketplace_totals(session)
+            rate = await services.get_commission_rate(session)
+        self.commission_pct = f"{rate * 100:.0f}"
+        self.mkt_gross = f"{totals['gross']:.2f}"
+        self.mkt_commission = f"{totals['commission']:.2f}"
+        self.mkt_net = f"{totals['net']:.2f}"
+        self.mkt_pending = totals["pending_agencies"]
+        self.mkt_approved = totals["approved_agencies"]
+        self.agencies = [
+            AgencyRow(
+                id=r.user.id,
+                name=r.user.agency_name or "—",
+                username=r.user.username or str(r.user.telegram_id),
+                status=r.user.agency_status or "—",
+                orders=r.orders,
+                gross=f"{r.gross:.2f}",
+                commission=f"{r.commission:.2f}",
+                net=f"{r.net:.2f}",
+                balance=f"{r.balance:.2f}",
+                payout_contact=r.user.payout_contact or "—",
+            )
+            for r in rows
+        ]
+
+    def set_commission_pct(self, v: str) -> None:
+        self.commission_pct = v
+
+    async def save_commission(self) -> None:
+        if not self.authed:
+            return
+        from decimal import Decimal, InvalidOperation
+
+        try:
+            pct = Decimal(self.commission_pct or "0")
+        except InvalidOperation:
+            self.commission_message = "⚠ Invalid percentage."
+            return
+        try:
+            async with AsyncSessionLocal() as session:
+                stored = await services.set_commission_rate(
+                    session, pct / Decimal("100")
+                )
+        except services.ServiceError as exc:
+            self.commission_message = f"⚠ {exc}"
+            return
+        self.commission_pct = f"{stored * 100:.0f}"
+        self.commission_message = (
+            f"✅ Commission set to {stored * 100:.0f}% — applies to new orders."
+        )
+        await self._load_marketplace()
+
+    async def approve_agency(self, user_id: int) -> None:
+        if not self.authed:
+            return
+        async with AsyncSessionLocal() as session:
+            await services.set_agency_status(session, user_id, "approved")
+        await self._load_marketplace()
+
+    async def suspend_agency(self, user_id: int) -> None:
+        if not self.authed:
+            return
+        async with AsyncSessionLocal() as session:
+            await services.set_agency_status(session, user_id, "suspended")
+        await self._load_marketplace()
 
     async def _load_sms(self) -> None:
         from shared import sms_service
@@ -1632,6 +1725,141 @@ def marketing_tab() -> rx.Component:
 
 
 # --------------------------------------------------------------------------- #
+# Marketplace (agencies) tab
+# --------------------------------------------------------------------------- #
+def _agency_status_badge(status) -> rx.Component:
+    return rx.badge(
+        status,
+        color_scheme=rx.match(
+            status,
+            ("approved", "green"),
+            ("pending", "amber"),
+            ("suspended", "red"),
+            ("rejected", "gray"),
+            "gray",
+        ),
+        variant="soft",
+    )
+
+
+def _agency_row(a: AgencyRow) -> rx.Component:
+    return rx.table.row(
+        rx.table.cell(rx.text(a.id, color_scheme="gray")),
+        rx.table.cell(rx.text(a.name, weight="medium")),
+        rx.table.cell(rx.text(a.username, size="1")),
+        rx.table.cell(_agency_status_badge(a.status)),
+        rx.table.cell(a.orders),
+        rx.table.cell("$" + a.gross),
+        rx.table.cell(rx.text("$" + a.commission, color_scheme="green")),
+        rx.table.cell("$" + a.net),
+        rx.table.cell(rx.text("$" + a.balance, weight="medium")),
+        rx.table.cell(rx.text(a.payout_contact, size="1")),
+        rx.table.cell(
+            rx.cond(
+                a.status == "approved",
+                rx.button(
+                    "Suspend", size="1", color_scheme="red", variant="soft",
+                    on_click=lambda: AdminState.suspend_agency(a.id),
+                ),
+                rx.button(
+                    "Approve", size="1", color_scheme="green",
+                    on_click=lambda: AdminState.approve_agency(a.id),
+                ),
+            )
+        ),
+        align="center",
+    )
+
+
+def marketplace_tab() -> rx.Component:
+    return rx.vstack(
+        rx.grid(
+            stat_card("store", "Marketplace GMV", "$" + AdminState.mkt_gross, "blue"),
+            stat_card("hand-coins", "Your commission", "$" + AdminState.mkt_commission, "green"),
+            stat_card("wallet", "Owed to agencies", "$" + AdminState.mkt_net, "amber"),
+            stat_card("badge-check", "Approved", AdminState.mkt_approved, "green"),
+            stat_card("hourglass", "Pending", AdminState.mkt_pending, "amber"),
+            columns=rx.breakpoints(initial="2", sm="3", lg="5"),
+            spacing="3",
+            width="100%",
+        ),
+        rx.card(
+            rx.vstack(
+                card_header(
+                    "percent",
+                    "Platform commission",
+                    "Taken from every agency order. Applies to new orders.",
+                ),
+                rx.hstack(
+                    rx.input(
+                        type="number",
+                        value=AdminState.commission_pct,
+                        on_change=AdminState.set_commission_pct,
+                        width="6em",
+                        size="3",
+                    ),
+                    rx.text("%", size="4", weight="bold"),
+                    rx.button(
+                        rx.icon("save", size=16), "Save",
+                        on_click=AdminState.save_commission, size="2",
+                    ),
+                    spacing="2",
+                    align="center",
+                ),
+                section_message(AdminState.commission_message),
+                spacing="3",
+                width="100%",
+            ),
+            size="3",
+            width="100%",
+        ),
+        rx.card(
+            rx.vstack(
+                card_header(
+                    "store",
+                    "Agencies",
+                    "Approve applications and manage sellers. GMV = their gross "
+                    "sales; commission = your cut; balance = owed to them now.",
+                ),
+                rx.box(
+                    rx.table.root(
+                        rx.table.header(
+                            rx.table.row(
+                                rx.table.column_header_cell("ID"),
+                                rx.table.column_header_cell("Agency"),
+                                rx.table.column_header_cell("User"),
+                                rx.table.column_header_cell("Status"),
+                                rx.table.column_header_cell("Orders"),
+                                rx.table.column_header_cell("GMV"),
+                                rx.table.column_header_cell("Commission"),
+                                rx.table.column_header_cell("Net"),
+                                rx.table.column_header_cell("Balance"),
+                                rx.table.column_header_cell("Payout to"),
+                                rx.table.column_header_cell(""),
+                            )
+                        ),
+                        rx.table.body(
+                            rx.foreach(AdminState.agencies, _agency_row)
+                        ),
+                        variant="surface",
+                        size="1",
+                        width="100%",
+                    ),
+                    overflow_x="auto",
+                    width="100%",
+                ),
+                spacing="4",
+                width="100%",
+            ),
+            size="3",
+            width="100%",
+        ),
+        spacing="4",
+        width="100%",
+    )
+
+
+# --------------------------------------------------------------------------- #
 # SMS activation tab
 # --------------------------------------------------------------------------- #
 def _sms_status_badge(status) -> rx.Component:
@@ -1846,6 +2074,7 @@ def dashboard_view() -> rx.Component:
                         _tab_trigger("boxes", "Products", "products"),
                         _tab_trigger("shopping-cart", "Orders", "orders"),
                         _tab_trigger("users", "Users", "users"),
+                        _tab_trigger("store", "Agencies", "agencies"),
                         _tab_trigger("smartphone", "SMS", "sms"),
                         _tab_trigger("megaphone", "Marketing", "marketing"),
                         size="2",
@@ -1858,6 +2087,9 @@ def dashboard_view() -> rx.Component:
                     ),
                     rx.tabs.content(
                         users_tab(), value="users", padding_top="1.2em"
+                    ),
+                    rx.tabs.content(
+                        marketplace_tab(), value="agencies", padding_top="1.2em"
                     ),
                     rx.tabs.content(
                         sms_tab(), value="sms", padding_top="1.2em"

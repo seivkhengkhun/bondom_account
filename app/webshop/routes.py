@@ -587,3 +587,55 @@ async def my_sms_orders(request: Request):
         orders=orders,
         balance=f"{balance:.2f}",
     )
+
+
+# --------------------------------------------------------------------------- #
+# Marketplace — become a seller (agency) application + status
+# --------------------------------------------------------------------------- #
+@router.get("/seller", response_class=HTMLResponse)
+async def seller_home(request: Request):
+    user = await _session_user(request)
+    if user is None:
+        return RedirectResponse("/")
+    async with AsyncSessionLocal() as session:
+        fresh = await session.get(services.User, user.id)
+        status = fresh.agency_status if fresh else None
+        agency_name = fresh.agency_name if fresh else ""
+        balance = await services.get_agency_balance(session, user.id)
+        commission = await services.get_commission_rate(session)
+    return await _render(
+        request,
+        "seller.html",
+        status=status,
+        agency_name=agency_name or "",
+        balance=f"{balance:.2f}",
+        commission_pct=f"{commission * 100:.0f}",
+        error=request.query_params.get("error", ""),
+        success=request.query_params.get("success", ""),
+    )
+
+
+@router.post("/seller/apply")
+async def seller_apply(
+    request: Request,
+    agency_name: str = Form(...),
+    payout_contact: str = Form(...),
+):
+    user = await _session_user(request)
+    if user is None:
+        return RedirectResponse("/", status_code=303)
+    from urllib.parse import quote
+
+    try:
+        async with AsyncSessionLocal() as session:
+            await services.apply_as_agency(
+                session, user.id, agency_name, payout_contact
+            )
+    except services.ServiceError as exc:
+        return RedirectResponse(
+            "/seller?error=" + quote(str(exc)), status_code=303
+        )
+    return RedirectResponse(
+        "/seller?success=" + quote("Application submitted — awaiting approval."),
+        status_code=303,
+    )

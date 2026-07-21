@@ -1064,3 +1064,123 @@ async def get_store_stats(session: AsyncSession) -> StoreStats:
         revenue=Decimal(revenue or 0),
         available_stock=int(available_stock or 0),
     )
+
+
+# --------------------------------------------------------------------------- #
+# Marketplace: agency onboarding, governance, reporting
+# --------------------------------------------------------------------------- #
+class AgencyRow(NamedTuple):
+    user: User
+    orders: int
+    gross: Decimal
+    commission: Decimal  # platform's cut
+    net: Decimal  # agency's earned total
+    balance: Decimal  # current withdrawable
+
+
+async def apply_as_agency(
+    session: AsyncSession, user_id: int, agency_name: str, payout_contact: str
+) -> User:
+    """A logged-in user requests to become a selling agency (pending)."""
+    name = agency_name.strip()
+    if len(name) < 2:
+        raise ServiceError("Agency name must be at least 2 characters")
+    async with transaction_scope(session):
+        user = await session.get(User, user_id)
+        if user is None:
+            raise UserNotFoundError(user_id)
+        if user.agency_status == "approved":
+            raise ServiceError("You are already an approved agency")
+        user.agency_name = name
+        user.payout_contact = payout_contact.strip()
+        user.agency_status = "pending"
+    return user
+
+
+async def set_agency_status(
+    session: AsyncSession, user_id: int, status: str
+) -> User:
+    """Admin: approve / suspend / reject an agency."""
+    if status not in ("approved", "suspended", "pending", "rejected"):
+        raise ServiceError(f"Invalid agency status: {status}")
+    async with transaction_scope(session):
+        user = await session.get(User, user_id)
+        if user is None:
+            raise UserNotFoundError(user_id)
+        user.agency_status = status
+        user.is_agency = status == "approved"
+    return user
+
+
+async def is_approved_agency(session: AsyncSession, user_id: int) -> bool:
+    async with transaction_scope(session):
+        user = await session.get(User, user_id)
+    return bool(user and user.agency_status == "approved" and user.is_agency)
+
+
+async def list_agencies(session: AsyncSession) -> list[AgencyRow]:
+    """Every agency (any status) with its lifetime marketplace economics."""
+    async with transaction_scope(session):
+        users = list(
+            await session.scalars(
+                select(User)
+                .where(User.agency_status.is_not(None))
+                .order_by(User.id.desc())
+            )
+        )
+        rows: list[AgencyRow] = []
+        for u in users:
+            agg = (
+                await session.execute(
+                    select(
+                        func.count(AgencyEarning.id),
+                        func.coalesce(func.sum(AgencyEarning.gross), 0),
+                        func.coalesce(func.sum(AgencyEarning.commission_amount), 0),
+                        func.coalesce(func.sum(AgencyEarning.net), 0),
+                    ).where(
+                        AgencyEarning.seller_id == u.id,
+                        AgencyEarning.status == AgencyEarningStatus.EARNED,
+                    )
+                )
+            ).one()
+            balance = await get_agency_balance(session, u.id)
+            rows.append(
+                AgencyRow(
+                    user=u,
+                    orders=int(agg[0] or 0),
+                    gross=_to_money(Decimal(str(agg[1]))),
+                    commission=_to_money(Decimal(str(agg[2]))),
+                    net=_to_money(Decimal(str(agg[3]))),
+                    balance=balance,
+                )
+            )
+    return rows
+
+
+async def marketplace_totals(session: AsyncSession) -> dict:
+    """Platform-wide marketplace figures for the admin dashboard."""
+    async with transaction_scope(session):
+        agg = (
+            await session.execute(
+                select(
+                    func.count(AgencyEarning.id),
+                    func.coalesce(func.sum(AgencyEarning.gross), 0),
+                    func.coalesce(func.sum(AgencyEarning.commission_amount), 0),
+                    func.coalesce(func.sum(AgencyEarning.net), 0),
+                ).where(AgencyEarning.status == AgencyEarningStatus.EARNED)
+            )
+        ).one()
+        pending = await session.scalar(
+            select(func.count(User.id)).where(User.agency_status == "pending")
+        )
+        approved = await session.scalar(
+            select(func.count(User.id)).where(User.agency_status == "approved")
+        )
+    return {
+        "orders": int(agg[0] or 0),
+        "gross": _to_money(Decimal(str(agg[1]))),
+        "commission": _to_money(Decimal(str(agg[2]))),  # platform revenue
+        "net": _to_money(Decimal(str(agg[3]))),  # paid/owed to agencies
+        "pending_agencies": int(pending or 0),
+        "approved_agencies": int(approved or 0),
+    }

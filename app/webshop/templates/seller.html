@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Sell on Bondom — Bondom Account{% endblock %}
+{% block content %}
+  <div class="pay-layout">
+    {% if success %}<p class="alert" style="background:var(--green-soft);border:1px solid rgba(52,211,153,.3);color:var(--green)" role="status">✅ {{ success }}</p>{% endif %}
+    {% if error %}<p class="alert error" role="alert">⚠ {{ error }}</p>{% endif %}
+
+    {% if status == "approved" %}
+      <div class="card">
+        <span class="chip">Approved agency</span>
+        <h1 style="font-size:1.4rem;margin:.5rem 0">🏪 {{ agency_name }}</h1>
+        <p class="muted">You can publish products and earn on every sale.</p>
+        <div class="refund-meta" style="margin-top:1rem">
+          <div><dt>Earnings balance</dt><dd class="refund-amt">${{ balance }}</dd></div>
+          <div><dt>Platform commission</dt><dd>{{ commission_pct }}% per order</dd></div>
+        </div>
+        <p class="hint">Product publishing &amp; payouts are coming to your seller
+          dashboard next. Your earnings are already being tracked on every delivered order.</p>
+      </div>
+
+    {% elif status == "pending" %}
+      <div class="card center-card">
+        <p class="empty-emoji" aria-hidden="true">⏳</p>
+        <h1>Application under review</h1>
+        <p class="muted">Your agency <b>{{ agency_name }}</b> is awaiting approval.
+          We'll enable selling once it's approved.</p>
+      </div>
+
+    {% elif status == "suspended" %}
+      <div class="card center-card">
+        <p class="empty-emoji" aria-hidden="true">🚫</p>
+        <h1>Agency suspended</h1>
+        <p class="muted">Contact support to restore your selling access.</p>
+      </div>
+
+    {% else %}
+      <div class="card">
+        <h1 style="font-size:1.4rem">🏪 Become a seller</h1>
+        <p class="muted" style="margin:.4rem 0 1rem">
+          Publish your own products and reach every Bondom customer. You keep
+          <b>{{ 100 - commission_pct|int }}%</b> of each sale — the platform takes a
+          {{ commission_pct }}% commission and handles payment &amp; delivery.</p>
+        <form method="post" action="/seller/apply" class="buy-form" style="flex-direction:column;align-items:stretch;gap:.9rem">
+          <label style="width:100%">Agency / store name
+            <input type="text" name="agency_name" required maxlength="128"
+                   placeholder="e.g. Sok's Digital Shop"
+                   style="width:100%;padding:.6rem .8rem;background:var(--surface-2);border:1px solid var(--border-strong);border-radius:10px;color:var(--text);font-size:1rem">
+          </label>
+          <label style="width:100%">Payout contact (Telegram / phone / bank)
+            <input type="text" name="payout_contact" required maxlength="255"
+                   placeholder="How we send your earnings, e.g. @yourhandle / ABA 000..."
+                   style="width:100%;padding:.6rem .8rem;background:var(--surface-2);border:1px solid var(--border-strong);border-radius:10px;color:var(--text);font-size:1rem">
+          </label>
+          <button type="submit" class="btn btn-primary btn-lg">Submit application</button>
+        </form>
+        <p class="hint">Applications are reviewed by our team before your products go live.</p>
+      </div>
+    {% endif %}
+  </div>
+{% endblock %}
