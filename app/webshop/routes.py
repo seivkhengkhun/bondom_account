@@ -115,18 +115,31 @@ async def logout() -> RedirectResponse:
 # Catalog
 # --------------------------------------------------------------------------- #
 async def _catalog() -> tuple[list, bool, dict[int, str]]:
-    """Active products, stock-visibility flag, and {product_id: seller name}
-    for agency products (house products are absent from the map)."""
+    """Buyable products, stock-visibility flag, and {product_id: seller label}.
+
+    Products owned by a non-approved (pending/suspended) agency are hidden
+    from the storefront entirely. House products always show. The seller
+    label carries the agency name plus its sales-based trust tier.
+    """
     async with AsyncSessionLocal() as session:
         overviews = await services.list_product_overviews(session)
         show_stock = await services.get_bot_show_stock(session)
-        active = [o for o in overviews if o.product.is_active]
+        visible: list = []
         sellers: dict[int, str] = {}
-        for o in active:
-            name = await services.get_product_owner_name(session, o.product)
-            if name:
-                sellers[o.product.id] = name
-    return active, show_stock, sellers
+        for o in overviews:
+            if not o.product.is_active:
+                continue
+            ok, seller_name, sales = await services.product_visibility(
+                session, o.product
+            )
+            if not ok:
+                continue  # suspended/pending agency — hide from buyers
+            visible.append(o)
+            if seller_name:
+                sellers[o.product.id] = (
+                    f"{seller_name} · {services.seller_trust_label(sales)}"
+                )
+    return visible, show_stock, sellers
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -795,3 +808,66 @@ async def seller_toggle(
     except services.AgencyProductError:
         pass
     return RedirectResponse("/seller/products", status_code=303)
+
+
+# --------------------------------------------------------------------------- #
+# Seller payouts — withdraw earnings balance
+# --------------------------------------------------------------------------- #
+@router.get("/seller/payouts", response_class=HTMLResponse)
+async def seller_payouts(request: Request):
+    user = await _require_approved_agency(request)
+    if user is None:
+        return RedirectResponse("/seller")
+    async with AsyncSessionLocal() as session:
+        balance = await services.get_agency_balance(session, user.id)
+        payouts = await services.list_payouts(session, seller_id=user.id, limit=50)
+        fresh = await session.get(services.User, user.id)
+        payout_contact = fresh.payout_contact if fresh else ""
+    return await _render(
+        request,
+        "seller_payouts.html",
+        balance=f"{balance:.2f}",
+        min_payout=f"{services.MIN_PAYOUT:.2f}",
+        payout_contact=payout_contact or "",
+        payouts=payouts,
+        error=request.query_params.get("error", ""),
+        success=request.query_params.get("success", ""),
+    )
+
+
+@router.post("/seller/payouts/request")
+async def seller_request_payout(
+    request: Request, amount: str = Form(...), method: str = Form("")
+):
+    user = await _require_approved_agency(request)
+    if user is None:
+        return RedirectResponse("/seller", status_code=303)
+    from decimal import Decimal, InvalidOperation
+    from urllib.parse import quote
+
+    try:
+        value = Decimal(amount)
+    except InvalidOperation:
+        return RedirectResponse(
+            "/seller/payouts?error=Invalid+amount", status_code=303
+        )
+    try:
+        async with AsyncSessionLocal() as session:
+            await services.request_payout(session, user.id, value, method)
+    except services.InsufficientBalanceError as exc:
+        return RedirectResponse(
+            "/seller/payouts?error=" + quote(
+                f"You only have ${exc.balance:.2f} available"
+            ),
+            status_code=303,
+        )
+    except services.ServiceError as exc:
+        return RedirectResponse(
+            "/seller/payouts?error=" + quote(str(exc)), status_code=303
+        )
+    return RedirectResponse(
+        "/seller/payouts?success=" + quote(
+            "Payout requested — we'll process it shortly."
+        ),
+        status_code=303,
+    )

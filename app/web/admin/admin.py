@@ -84,6 +84,17 @@ class AgencyRow:
 
 
 @dataclasses.dataclass
+class PayoutRow:
+    id: int
+    agency: str
+    amount: str
+    method: str
+    status: str
+    note: str
+    created_at: str
+
+
+@dataclasses.dataclass
 class SmsRow:
     id: int
     user: str
@@ -117,6 +128,7 @@ class AdminState(rx.State):
     users: list[UserRow] = []
     sms_orders: list[SmsRow] = []
     agencies: list[AgencyRow] = []
+    payouts: list[PayoutRow] = []
 
     # Marketplace
     commission_pct: str = "5"
@@ -382,6 +394,7 @@ class AdminState(rx.State):
         self.mkt_net = f"{totals['net']:.2f}"
         self.mkt_pending = totals["pending_agencies"]
         self.mkt_approved = totals["approved_agencies"]
+        name_by_id = {r.user.id: (r.user.agency_name or r.user.username or f"#{r.user.id}") for r in rows}
         self.agencies = [
             AgencyRow(
                 id=r.user.id,
@@ -396,6 +409,20 @@ class AdminState(rx.State):
                 payout_contact=r.user.payout_contact or "—",
             )
             for r in rows
+        ]
+        async with AsyncSessionLocal() as session:
+            payouts = await services.list_payouts(session, limit=100)
+        self.payouts = [
+            PayoutRow(
+                id=p.id,
+                agency=name_by_id.get(p.seller_id, f"#{p.seller_id}"),
+                amount=f"{p.amount:.2f}",
+                method=p.method or "—",
+                status=p.status.value,
+                note=p.admin_note or "",
+                created_at=p.created_at.strftime("%Y-%m-%d %H:%M"),
+            )
+            for p in payouts
         ]
 
     def set_commission_pct(self, v: str) -> None:
@@ -437,6 +464,22 @@ class AdminState(rx.State):
             return
         async with AsyncSessionLocal() as session:
             await services.set_agency_status(session, user_id, "suspended")
+        await self._load_marketplace()
+
+    async def mark_payout_paid(self, payout_id: int) -> None:
+        if not self.authed:
+            return
+        async with AsyncSessionLocal() as session:
+            await services.set_payout_status(session, payout_id, "paid", "")
+        await self._load_marketplace()
+
+    async def reject_payout(self, payout_id: int) -> None:
+        if not self.authed:
+            return
+        async with AsyncSessionLocal() as session:
+            await services.set_payout_status(
+                session, payout_id, "rejected", "Rejected by admin"
+            )
         await self._load_marketplace()
 
     async def _load_sms(self) -> None:
@@ -1771,6 +1814,85 @@ def _agency_row(a: AgencyRow) -> rx.Component:
     )
 
 
+def _payout_row(p: PayoutRow) -> rx.Component:
+    return rx.table.row(
+        rx.table.cell(rx.text(p.id, color_scheme="gray")),
+        rx.table.cell(rx.text(p.agency, weight="medium")),
+        rx.table.cell(rx.text("$" + p.amount, weight="medium")),
+        rx.table.cell(rx.text(p.method, size="1")),
+        rx.table.cell(
+            rx.badge(
+                p.status,
+                color_scheme=rx.match(
+                    p.status,
+                    ("paid", "green"),
+                    ("requested", "amber"),
+                    ("rejected", "red"),
+                    "gray",
+                ),
+                variant="soft",
+            )
+        ),
+        rx.table.cell(rx.text(p.created_at, color_scheme="gray", size="1")),
+        rx.table.cell(
+            rx.cond(
+                p.status == "requested",
+                rx.hstack(
+                    rx.button(
+                        "Mark paid", size="1", color_scheme="green",
+                        on_click=lambda: AdminState.mark_payout_paid(p.id),
+                    ),
+                    rx.button(
+                        "Reject", size="1", color_scheme="red", variant="soft",
+                        on_click=lambda: AdminState.reject_payout(p.id),
+                    ),
+                    spacing="1",
+                ),
+                rx.text(p.note, size="1", color_scheme="gray"),
+            )
+        ),
+        align="center",
+    )
+
+
+def payouts_card() -> rx.Component:
+    return rx.card(
+        rx.vstack(
+            card_header(
+                "banknote",
+                "Payout requests",
+                "Agencies withdraw their earnings. Mark paid after you send "
+                "money; reject to refund it to their balance.",
+            ),
+            rx.box(
+                rx.table.root(
+                    rx.table.header(
+                        rx.table.row(
+                            rx.table.column_header_cell("ID"),
+                            rx.table.column_header_cell("Agency"),
+                            rx.table.column_header_cell("Amount"),
+                            rx.table.column_header_cell("Send to"),
+                            rx.table.column_header_cell("Status"),
+                            rx.table.column_header_cell("Requested"),
+                            rx.table.column_header_cell(""),
+                        )
+                    ),
+                    rx.table.body(rx.foreach(AdminState.payouts, _payout_row)),
+                    variant="surface",
+                    size="1",
+                    width="100%",
+                ),
+                overflow_x="auto",
+                width="100%",
+            ),
+            spacing="4",
+            width="100%",
+        ),
+        size="3",
+        width="100%",
+    )
+
+
 def marketplace_tab() -> rx.Component:
     return rx.vstack(
         rx.grid(
@@ -1854,6 +1976,7 @@ def marketplace_tab() -> rx.Component:
             size="3",
             width="100%",
         ),
+        payouts_card(),
         spacing="4",
         width="100%",
     )

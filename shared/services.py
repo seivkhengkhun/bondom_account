@@ -24,6 +24,8 @@ from shared.models import (
     Order,
     OrderStatus,
     Payment,
+    Payout,
+    PayoutStatus,
     Product,
     User,
 )
@@ -829,6 +831,13 @@ async def create_order_and_allocate_stock(
         product = await session.get(Product, payload.product_id)
         if product is None or not product.is_active:
             raise ProductNotFoundError(payload.product_id)
+        # Marketplace: block sales of a product whose agency is no longer
+        # approved (suspended/pending) — a single chokepoint that protects
+        # the bot, website and API at once.
+        if product.owner_id is not None:
+            owner = await session.get(User, product.owner_id)
+            if owner is None or owner.agency_status != "approved":
+                raise ProductNotFoundError(payload.product_id)
 
         stmt = (
             select(Inventory)
@@ -1287,3 +1296,131 @@ async def get_product_owner_name(
     if owner is None or owner.agency_status != "approved":
         return None
     return owner.agency_name or None
+
+
+# --------------------------------------------------------------------------- #
+# Marketplace: payouts (agency withdrawals against earnings balance)
+# --------------------------------------------------------------------------- #
+MIN_PAYOUT = Decimal("1.00")
+
+
+async def _spend_agency_balance(
+    session: AsyncSession, user_id: int, amount: Decimal
+) -> Decimal:
+    """Deduct from an agency's earnings balance; raise if insufficient."""
+    async with transaction_scope(session):
+        key = _agency_balance_key(user_id)
+        row = await session.get(AppSetting, key)
+        current = Decimal("0.00") if row is None else Decimal(row.value)
+        if current < amount:
+            raise InsufficientBalanceError(user_id, amount, _to_money(current))
+        updated = _to_money(current - amount)
+        if row is None:
+            session.add(AppSetting(key=key, value=str(updated)))
+        else:
+            row.value = str(updated)
+        return updated
+
+
+async def request_payout(
+    session: AsyncSession, seller_id: int, amount: Decimal, method: str = ""
+) -> Payout:
+    """Agency requests a withdrawal. Reserves the amount from their balance
+    immediately so it cannot be requested twice."""
+    amount = _to_money(amount)
+    if amount < MIN_PAYOUT:
+        raise ServiceError(f"Minimum payout is ${MIN_PAYOUT:.2f}")
+    if not await is_approved_agency(session, seller_id):
+        raise AgencyProductError("Only approved agencies can request payouts")
+    # Deduct first (raises InsufficientBalanceError if the balance is too low).
+    await _spend_agency_balance(session, seller_id, amount)
+    async with transaction_scope(session):
+        user = await session.get(User, seller_id)
+        payout = Payout(
+            seller_id=seller_id,
+            amount=amount,
+            method=method.strip() or (user.payout_contact if user else "") or "",
+            status=PayoutStatus.REQUESTED,
+        )
+        session.add(payout)
+    return payout
+
+
+async def set_payout_status(
+    session: AsyncSession, payout_id: int, status: str, note: str = ""
+) -> Payout:
+    """Admin resolves a payout. REJECTED refunds the reserved amount."""
+    from datetime import datetime, timezone
+
+    if status not in ("paid", "rejected"):
+        raise ServiceError("Payout can only be marked paid or rejected")
+    async with transaction_scope(session):
+        payout = await session.get(Payout, payout_id)
+        if payout is None:
+            raise ServiceError(f"Payout {payout_id} not found")
+        if payout.status is not PayoutStatus.REQUESTED:
+            return payout  # idempotent — already resolved
+        payout.status = PayoutStatus(status)
+        payout.admin_note = note.strip()
+        payout.resolved_at = datetime.now(timezone.utc)
+        seller_id = payout.seller_id
+        amount = payout.amount
+        refund = status == "rejected"
+    if refund:
+        await _add_agency_balance(session, seller_id, amount)
+    return payout
+
+
+async def list_payouts(
+    session: AsyncSession, seller_id: int | None = None, limit: int = 200
+) -> list[Payout]:
+    stmt = select(Payout).order_by(Payout.created_at.desc(), Payout.id.desc())
+    if seller_id is not None:
+        stmt = stmt.where(Payout.seller_id == seller_id)
+    async with transaction_scope(session):
+        return list(await session.scalars(stmt.limit(limit)))
+
+
+# --------------------------------------------------------------------------- #
+# Marketplace: seller trust (sales volume) + storefront visibility
+# --------------------------------------------------------------------------- #
+async def agency_sales_count(session: AsyncSession, seller_id: int) -> int:
+    """Completed (non-reversed) sales for an agency — a real trust signal."""
+    async with transaction_scope(session):
+        n = await session.scalar(
+            select(func.count(AgencyEarning.id)).where(
+                AgencyEarning.seller_id == seller_id,
+                AgencyEarning.status == AgencyEarningStatus.EARNED,
+            )
+        )
+    return int(n or 0)
+
+
+def seller_trust_label(sales: int) -> str:
+    """Honest, sales-based trust tier shown to buyers."""
+    if sales >= 100:
+        return f"⭐ Top seller · {sales} sales"
+    if sales >= 25:
+        return f"⭐ Trusted · {sales} sales"
+    if sales >= 1:
+        return f"{sales} sales"
+    return "New seller"
+
+
+async def product_visibility(
+    session: AsyncSession, product: Product
+) -> tuple[bool, str | None, int]:
+    """(visible, seller_name, sales_count) for storefront listing.
+
+    House products (no owner) always show with no seller. Agency products
+    show ONLY while their agency is approved — a suspended/pending agency's
+    products are hidden from buyers automatically.
+    """
+    if product.owner_id is None:
+        return True, None, 0
+    async with transaction_scope(session):
+        owner = await session.get(User, product.owner_id)
+    if owner is None or owner.agency_status != "approved":
+        return False, None, 0
+    sales = await agency_sales_count(session, owner.id)
+    return True, owner.agency_name, sales

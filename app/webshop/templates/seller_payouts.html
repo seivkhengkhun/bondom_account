@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Payouts — Seller — Bondom Account{% endblock %}
+{% block content %}
+  <div class="page-head">
+    <h1>💸 Payouts</h1>
+    <div class="head-actions">
+      <span class="wallet-chip">💰 Available ${{ balance }}</span>
+      <a class="btn btn-ghost btn-sm" href="/seller/products">My products</a>
+    </div>
+  </div>
+
+  {% if success %}<p class="alert" style="background:var(--green-soft);border:1px solid rgba(52,211,153,.3);color:var(--green)" role="status">✅ {{ success }}</p>{% endif %}
+  {% if error %}<p class="alert error" role="alert">⚠ {{ error }}</p>{% endif %}
+
+  <div class="card" style="margin-bottom:1.2rem">
+    <h2 style="font-size:1.1rem;margin-bottom:.6rem">Request a withdrawal</h2>
+    <p class="muted" style="font-size:.88rem;margin-bottom:.8rem">
+      Minimum ${{ min_payout }}. The amount is held from your balance while we
+      process it, and refunded if we can't complete it.</p>
+    <form method="post" action="/seller/payouts/request" class="buy-form" style="flex-direction:column;align-items:stretch;gap:.8rem">
+      <label style="width:100%">Amount (USD)
+        <input type="number" name="amount" step="0.01" min="{{ min_payout }}" max="{{ balance }}" required
+               placeholder="{{ balance }}"
+               style="width:100%;padding:.55rem .8rem;background:var(--surface-2);border:1px solid var(--border-strong);border-radius:10px;color:var(--text);font-size:1rem">
+      </label>
+      <label style="width:100%">Send to (Telegram / bank / KHQR)
+        <input type="text" name="method" maxlength="255" value="{{ payout_contact }}"
+               placeholder="e.g. @yourhandle / ABA 000..."
+               style="width:100%;padding:.55rem .8rem;background:var(--surface-2);border:1px solid var(--border-strong);border-radius:10px;color:var(--text);font-size:1rem">
+      </label>
+      <button type="submit" class="btn btn-primary btn-lg">Request payout</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2 style="font-size:1.1rem;margin-bottom:.7rem">History</h2>
+    {% if payouts %}
+      <div class="orders-list">
+        {% for p in payouts %}
+          <div class="order-row" style="cursor:default">
+            <div class="or-main">
+              <span class="or-id">${{ "%.2f" | format(p.amount) }}</span>
+              <span class="or-date muted">{{ p.created_at.strftime("%Y-%m-%d %H:%M") }} · to {{ p.method or "—" }}</span>
+            </div>
+            <span class="badge {% if p.status.value == 'paid' %}ok{% elif p.status.value == 'requested' %}warn{% else %}out{% endif %}">
+              {{ p.status.value }}
+            </span>
+            <span class="or-action">{% if p.admin_note %}📝 {{ p.admin_note }}{% endif %}</span>
+          </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p class="muted">No payout requests yet.</p>
+    {% endif %}
+  </div>
+{% endblock %}

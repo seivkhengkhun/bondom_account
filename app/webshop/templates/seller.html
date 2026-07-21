@@ -14,11 +14,12 @@
           <div><dt>Earnings balance</dt><dd class="refund-amt">${{ balance }}</dd></div>
           <div><dt>Platform commission</dt><dd>{{ commission_pct }}% per order</dd></div>
         </div>
-        <a class="btn btn-primary btn-lg btn-block" href="/seller/products" style="margin-top:1rem">
-          📦 Manage my products
-        </a>
-        <p class="hint">Publish products, upload stock, and track sales. Payouts
-          of your earnings balance come next.</p>
+        <div style="display:flex;gap:.6rem;flex-wrap:wrap;margin-top:1rem">
+          <a class="btn btn-primary btn-lg" href="/seller/products">📦 My products</a>
+          <a class="btn btn-outline btn-lg" href="/seller/payouts">💸 Payouts</a>
+        </div>
+        <p class="hint">Publish products, upload stock, track sales, and
+          withdraw your earnings balance.</p>
       </div>
 
     {% elif status == "pending" %}

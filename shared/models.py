@@ -323,3 +323,43 @@ class AgencyEarning(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+
+
+class PayoutStatus(str, enum.Enum):
+    REQUESTED = "requested"
+    PAID = "paid"
+    REJECTED = "rejected"
+
+
+class Payout(Base):
+    """An agency's withdrawal request against its earnings balance.
+
+    The requested amount is deducted from the agency's withdrawable
+    balance immediately (so it can't be requested twice); admin marks it
+    PAID after sending money, or REJECTED which refunds the balance.
+    """
+
+    __tablename__ = "payouts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    seller_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), index=True
+    )
+    amount: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+    method: Mapped[str] = mapped_column(String(255), default="")
+    status: Mapped[PayoutStatus] = mapped_column(
+        Enum(
+            PayoutStatus,
+            name="payout_status",
+            values_callable=lambda e: [m.value for m in e],
+        ),
+        default=PayoutStatus.REQUESTED,
+        index=True,
+    )
+    admin_note: Mapped[str] = mapped_column(String(255), default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    resolved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
