@@ -16,16 +16,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from shared.models import (
-    AgencyEarning,
-    AgencyEarningStatus,
     AppSetting,
     Inventory,
     InventoryStatus,
     Order,
     OrderStatus,
     Payment,
-    Payout,
-    PayoutStatus,
     Product,
     User,
 )
@@ -245,19 +241,9 @@ async def list_active_telegram_ids(session: AsyncSession) -> list[int]:
 # --------------------------------------------------------------------------- #
 # Products
 # --------------------------------------------------------------------------- #
-async def create_product(
-    session: AsyncSession,
-    payload: ProductCreate,
-    owner_id: int | None = None,
-) -> Product:
-    """Persist a new product and return it.
-
-    ``owner_id`` set = an agency's product (marketplace); None = house
-    product owned by the platform.
-    """
+async def create_product(session: AsyncSession, payload: ProductCreate) -> Product:
+    """Persist a new product and return it."""
     product = Product(**payload.model_dump())
-    if owner_id is not None:
-        product.owner_id = owner_id
     async with transaction_scope(session):
         session.add(product)
     return product
@@ -427,17 +413,10 @@ async def delete_product(session: AsyncSession, product_id: int) -> None:
 BOT_SHOW_STOCK_KEY = "bot_show_stock"
 PRODUCT_NOTE_KEY_PREFIX = "product_note:"
 USER_BALANCE_KEY_PREFIX = "user_balance:"
-COMMISSION_RATE_KEY = "commission_rate"
-AGENCY_BALANCE_KEY_PREFIX = "agency_earnings:"
-DEFAULT_COMMISSION_RATE = Decimal("0.05")
 
 
 def _user_balance_key(user_id: int) -> str:
     return f"{USER_BALANCE_KEY_PREFIX}{user_id}"
-
-
-def _agency_balance_key(user_id: int) -> str:
-    return f"{AGENCY_BALANCE_KEY_PREFIX}{user_id}"
 
 
 def _to_money(value: Decimal) -> Decimal:
@@ -509,151 +488,6 @@ async def adjust_user_balance(
     if delta > 0:
         return await add_user_balance(session, user_id, delta)
     return await spend_user_balance(session, user_id, abs(delta))
-
-
-# --------------------------------------------------------------------------- #
-# Marketplace: commission rate, agency earnings balance, per-order split
-# --------------------------------------------------------------------------- #
-async def get_commission_rate(session: AsyncSession) -> Decimal:
-    """Platform commission fraction (e.g. 0.05 = 5%). DB overrides default."""
-    async with transaction_scope(session):
-        row = await session.get(AppSetting, COMMISSION_RATE_KEY)
-    if row is None:
-        return DEFAULT_COMMISSION_RATE
-    try:
-        rate = Decimal(row.value)
-    except Exception:
-        return DEFAULT_COMMISSION_RATE
-    return rate if Decimal("0") <= rate < Decimal("1") else DEFAULT_COMMISSION_RATE
-
-
-async def set_commission_rate(session: AsyncSession, rate: Decimal) -> Decimal:
-    """Persist the platform commission fraction (0 ≤ rate < 1)."""
-    if not (Decimal("0") <= rate < Decimal("1")):
-        raise ServiceError("Commission rate must be between 0 and 1 (e.g. 0.05)")
-    value = rate.quantize(Decimal("0.0001"))
-    async with transaction_scope(session):
-        row = await session.get(AppSetting, COMMISSION_RATE_KEY)
-        if row is None:
-            session.add(AppSetting(key=COMMISSION_RATE_KEY, value=str(value)))
-        else:
-            row.value = str(value)
-    return value
-
-
-async def get_agency_balance(session: AsyncSession, user_id: int) -> Decimal:
-    """Withdrawable earnings balance for an agency (USD)."""
-    async with transaction_scope(session):
-        row = await session.get(AppSetting, _agency_balance_key(user_id))
-        if row is None:
-            return Decimal("0.00")
-        try:
-            return _to_money(Decimal(row.value))
-        except Exception:
-            return Decimal("0.00")
-
-
-async def _add_agency_balance(
-    session: AsyncSession, user_id: int, amount: Decimal
-) -> Decimal:
-    async with transaction_scope(session):
-        key = _agency_balance_key(user_id)
-        row = await session.get(AppSetting, key)
-        current = Decimal("0.00") if row is None else Decimal(row.value)
-        updated = _to_money(current + amount)
-        if row is None:
-            session.add(AppSetting(key=key, value=str(updated)))
-        else:
-            row.value = str(updated)
-        return updated
-
-
-async def _order_seller_id(session: AsyncSession, order: Order) -> int | None:
-    """The agency that owns the order's product, or None for house products."""
-    async with transaction_scope(session):
-        item = await session.scalar(
-            select(Inventory).where(Inventory.assigned_order_id == order.id).limit(1)
-        )
-        if item is None:
-            return None
-        product = await session.get(Product, item.product_id)
-    if product is None or product.owner_id is None:
-        return None
-    return product.owner_id
-
-
-async def record_order_earning(
-    session: AsyncSession, order_id: int
-) -> AgencyEarning | None:
-    """Record the commission split for a delivered agency order.
-
-    House products (no owner) record nothing — the platform keeps 100%.
-    Idempotent: one earning row per order; a second call is a no-op.
-    Credits the agency's withdrawable earnings balance with the net.
-    """
-    async with transaction_scope(session):
-        existing = await session.scalar(
-            select(AgencyEarning).where(AgencyEarning.order_id == order_id)
-        )
-        if existing is not None:
-            return existing
-        order = await session.get(Order, order_id)
-        if order is None:
-            return None
-
-    seller_id = await _order_seller_id(session, order)
-    if seller_id is None:
-        return None
-
-    rate = await get_commission_rate(session)
-    gross = _to_money(order.total_price)
-    commission = _to_money(gross * rate)
-    net = _to_money(gross - commission)
-
-    async with transaction_scope(session):
-        # Re-check inside the write txn to keep idempotency under races.
-        existing = await session.scalar(
-            select(AgencyEarning).where(AgencyEarning.order_id == order_id)
-        )
-        if existing is not None:
-            return existing
-        earning = AgencyEarning(
-            order_id=order_id,
-            seller_id=seller_id,
-            gross=gross,
-            commission_rate=rate,
-            commission_amount=commission,
-            net=net,
-            status=AgencyEarningStatus.EARNED,
-        )
-        session.add(earning)
-    await _add_agency_balance(session, seller_id, net)
-    return earning
-
-
-async def reverse_order_earning(session: AsyncSession, order_id: int) -> bool:
-    """Reverse an earning if its order is refunded/canceled. Debits the
-    agency's earnings balance (never below zero). Idempotent."""
-    async with transaction_scope(session):
-        earning = await session.scalar(
-            select(AgencyEarning).where(AgencyEarning.order_id == order_id)
-        )
-        if earning is None or earning.status is AgencyEarningStatus.REVERSED:
-            return False
-        earning.status = AgencyEarningStatus.REVERSED
-        seller_id = earning.seller_id
-        net = earning.net
-
-    async with transaction_scope(session):
-        key = _agency_balance_key(seller_id)
-        row = await session.get(AppSetting, key)
-        current = Decimal("0.00") if row is None else Decimal(row.value)
-        updated = _to_money(max(Decimal("0.00"), current - net))
-        if row is None:
-            session.add(AppSetting(key=key, value=str(updated)))
-        else:
-            row.value = str(updated)
-    return True
 
 
 async def get_bot_show_stock(session: AsyncSession) -> bool:
@@ -831,13 +665,6 @@ async def create_order_and_allocate_stock(
         product = await session.get(Product, payload.product_id)
         if product is None or not product.is_active:
             raise ProductNotFoundError(payload.product_id)
-        # Marketplace: block sales of a product whose agency is no longer
-        # approved (suspended/pending) — a single chokepoint that protects
-        # the bot, website and API at once.
-        if product.owner_id is not None:
-            owner = await session.get(User, product.owner_id)
-            if owner is None or owner.agency_status != "approved":
-                raise ProductNotFoundError(payload.product_id)
 
         stmt = (
             select(Inventory)
@@ -936,8 +763,6 @@ async def mark_order_delivered(session: AsyncSession, order_id: int) -> Order:
         if order is None:
             raise OrderNotFoundError(order_id)
         order.status = OrderStatus.DELIVERED
-    # Settle the marketplace commission split (no-op for house products).
-    await record_order_earning(session, order_id)
     return order
 
 
@@ -964,10 +789,6 @@ async def cancel_order_and_release_inventory(
             item.assigned_order_id = None
         order.status = OrderStatus.CANCELED
         await session.flush()
-    # If this order had already earned commission, reverse it (defensive —
-    # today only PENDING orders cancel, but keeps the ledger correct if a
-    # post-delivery refund path is added later).
-    await reverse_order_earning(session, order_id)
     return order
 
 
@@ -1083,344 +904,3 @@ async def get_store_stats(session: AsyncSession) -> StoreStats:
         revenue=Decimal(revenue or 0),
         available_stock=int(available_stock or 0),
     )
-
-
-# --------------------------------------------------------------------------- #
-# Marketplace: agency onboarding, governance, reporting
-# --------------------------------------------------------------------------- #
-class AgencyRow(NamedTuple):
-    user: User
-    orders: int
-    gross: Decimal
-    commission: Decimal  # platform's cut
-    net: Decimal  # agency's earned total
-    balance: Decimal  # current withdrawable
-
-
-async def apply_as_agency(
-    session: AsyncSession, user_id: int, agency_name: str, payout_contact: str
-) -> User:
-    """A logged-in user requests to become a selling agency (pending)."""
-    name = agency_name.strip()
-    if len(name) < 2:
-        raise ServiceError("Agency name must be at least 2 characters")
-    async with transaction_scope(session):
-        user = await session.get(User, user_id)
-        if user is None:
-            raise UserNotFoundError(user_id)
-        if user.agency_status == "approved":
-            raise ServiceError("You are already an approved agency")
-        user.agency_name = name
-        user.payout_contact = payout_contact.strip()
-        user.agency_status = "pending"
-    return user
-
-
-async def set_agency_status(
-    session: AsyncSession, user_id: int, status: str
-) -> User:
-    """Admin: approve / suspend / reject an agency."""
-    if status not in ("approved", "suspended", "pending", "rejected"):
-        raise ServiceError(f"Invalid agency status: {status}")
-    async with transaction_scope(session):
-        user = await session.get(User, user_id)
-        if user is None:
-            raise UserNotFoundError(user_id)
-        user.agency_status = status
-        user.is_agency = status == "approved"
-    return user
-
-
-async def is_approved_agency(session: AsyncSession, user_id: int) -> bool:
-    async with transaction_scope(session):
-        user = await session.get(User, user_id)
-    return bool(user and user.agency_status == "approved" and user.is_agency)
-
-
-async def list_agencies(session: AsyncSession) -> list[AgencyRow]:
-    """Every agency (any status) with its lifetime marketplace economics."""
-    async with transaction_scope(session):
-        users = list(
-            await session.scalars(
-                select(User)
-                .where(User.agency_status.is_not(None))
-                .order_by(User.id.desc())
-            )
-        )
-        rows: list[AgencyRow] = []
-        for u in users:
-            agg = (
-                await session.execute(
-                    select(
-                        func.count(AgencyEarning.id),
-                        func.coalesce(func.sum(AgencyEarning.gross), 0),
-                        func.coalesce(func.sum(AgencyEarning.commission_amount), 0),
-                        func.coalesce(func.sum(AgencyEarning.net), 0),
-                    ).where(
-                        AgencyEarning.seller_id == u.id,
-                        AgencyEarning.status == AgencyEarningStatus.EARNED,
-                    )
-                )
-            ).one()
-            balance = await get_agency_balance(session, u.id)
-            rows.append(
-                AgencyRow(
-                    user=u,
-                    orders=int(agg[0] or 0),
-                    gross=_to_money(Decimal(str(agg[1]))),
-                    commission=_to_money(Decimal(str(agg[2]))),
-                    net=_to_money(Decimal(str(agg[3]))),
-                    balance=balance,
-                )
-            )
-    return rows
-
-
-async def marketplace_totals(session: AsyncSession) -> dict:
-    """Platform-wide marketplace figures for the admin dashboard."""
-    async with transaction_scope(session):
-        agg = (
-            await session.execute(
-                select(
-                    func.count(AgencyEarning.id),
-                    func.coalesce(func.sum(AgencyEarning.gross), 0),
-                    func.coalesce(func.sum(AgencyEarning.commission_amount), 0),
-                    func.coalesce(func.sum(AgencyEarning.net), 0),
-                ).where(AgencyEarning.status == AgencyEarningStatus.EARNED)
-            )
-        ).one()
-        pending = await session.scalar(
-            select(func.count(User.id)).where(User.agency_status == "pending")
-        )
-        approved = await session.scalar(
-            select(func.count(User.id)).where(User.agency_status == "approved")
-        )
-    return {
-        "orders": int(agg[0] or 0),
-        "gross": _to_money(Decimal(str(agg[1]))),
-        "commission": _to_money(Decimal(str(agg[2]))),  # platform revenue
-        "net": _to_money(Decimal(str(agg[3]))),  # paid/owed to agencies
-        "pending_agencies": int(pending or 0),
-        "approved_agencies": int(approved or 0),
-    }
-
-
-# --------------------------------------------------------------------------- #
-# Marketplace: agency-scoped product management (agencies touch only their own)
-# --------------------------------------------------------------------------- #
-class AgencyProductError(ServiceError):
-    """Raised when an agency acts on a product it does not own."""
-
-
-async def _assert_agency_owns(
-    session: AsyncSession, owner_id: int, product_id: int
-) -> Product:
-    async with transaction_scope(session):
-        product = await session.get(Product, product_id)
-    if product is None:
-        raise ProductNotFoundError(product_id)
-    if product.owner_id != owner_id:
-        raise AgencyProductError("This product does not belong to you")
-    return product
-
-
-async def list_agency_product_overviews(
-    session: AsyncSession, owner_id: int
-) -> list[ProductOverview]:
-    """Per-product stock/sales overview scoped to one agency's products."""
-    available = func.count(Inventory.id).filter(
-        Inventory.status == InventoryStatus.AVAILABLE
-    )
-    sold = func.count(Inventory.id).filter(
-        Inventory.status == InventoryStatus.SOLD
-    )
-    stmt = (
-        select(Product, available, sold)
-        .outerjoin(Inventory, Inventory.product_id == Product.id)
-        .where(Product.owner_id == owner_id)
-        .group_by(Product.id)
-        .order_by(Product.id.desc())
-    )
-    async with transaction_scope(session):
-        rows = (await session.execute(stmt)).all()
-    return [
-        ProductOverview(
-            product=product,
-            available=int(avail),
-            sold=int(nsold),
-            revenue=product.price * nsold,
-        )
-        for product, avail, nsold in rows
-    ]
-
-
-async def create_agency_product(
-    session: AsyncSession, owner_id: int, payload: ProductCreate
-) -> Product:
-    """Publish a product on behalf of an approved agency."""
-    if not await is_approved_agency(session, owner_id):
-        raise AgencyProductError("Your agency is not approved to sell")
-    return await create_product(session, payload, owner_id=owner_id)
-
-
-async def agency_add_inventory(
-    session: AsyncSession, owner_id: int, product_id: int, items: list[str]
-) -> InventoryImportResult:
-    """Add stock to the agency's OWN product (ownership enforced)."""
-    await _assert_agency_owns(session, owner_id, product_id)
-    return await bulk_add_inventory_with_report(session, product_id, items)
-
-
-async def agency_update_price(
-    session: AsyncSession, owner_id: int, product_id: int, price: Decimal
-) -> Product:
-    await _assert_agency_owns(session, owner_id, product_id)
-    return await update_product_price(session, product_id, price)
-
-
-async def agency_set_active(
-    session: AsyncSession, owner_id: int, product_id: int, is_active: bool
-) -> Product:
-    await _assert_agency_owns(session, owner_id, product_id)
-    return await set_product_active(session, product_id, is_active)
-
-
-async def get_product_owner_name(
-    session: AsyncSession, product: Product
-) -> str | None:
-    """Display name of a product's selling agency, or None for house."""
-    if product.owner_id is None:
-        return None
-    async with transaction_scope(session):
-        owner = await session.get(User, product.owner_id)
-    if owner is None or owner.agency_status != "approved":
-        return None
-    return owner.agency_name or None
-
-
-# --------------------------------------------------------------------------- #
-# Marketplace: payouts (agency withdrawals against earnings balance)
-# --------------------------------------------------------------------------- #
-MIN_PAYOUT = Decimal("1.00")
-
-
-async def _spend_agency_balance(
-    session: AsyncSession, user_id: int, amount: Decimal
-) -> Decimal:
-    """Deduct from an agency's earnings balance; raise if insufficient."""
-    async with transaction_scope(session):
-        key = _agency_balance_key(user_id)
-        row = await session.get(AppSetting, key)
-        current = Decimal("0.00") if row is None else Decimal(row.value)
-        if current < amount:
-            raise InsufficientBalanceError(user_id, amount, _to_money(current))
-        updated = _to_money(current - amount)
-        if row is None:
-            session.add(AppSetting(key=key, value=str(updated)))
-        else:
-            row.value = str(updated)
-        return updated
-
-
-async def request_payout(
-    session: AsyncSession, seller_id: int, amount: Decimal, method: str = ""
-) -> Payout:
-    """Agency requests a withdrawal. Reserves the amount from their balance
-    immediately so it cannot be requested twice."""
-    amount = _to_money(amount)
-    if amount < MIN_PAYOUT:
-        raise ServiceError(f"Minimum payout is ${MIN_PAYOUT:.2f}")
-    if not await is_approved_agency(session, seller_id):
-        raise AgencyProductError("Only approved agencies can request payouts")
-    # Deduct first (raises InsufficientBalanceError if the balance is too low).
-    await _spend_agency_balance(session, seller_id, amount)
-    async with transaction_scope(session):
-        user = await session.get(User, seller_id)
-        payout = Payout(
-            seller_id=seller_id,
-            amount=amount,
-            method=method.strip() or (user.payout_contact if user else "") or "",
-            status=PayoutStatus.REQUESTED,
-        )
-        session.add(payout)
-    return payout
-
-
-async def set_payout_status(
-    session: AsyncSession, payout_id: int, status: str, note: str = ""
-) -> Payout:
-    """Admin resolves a payout. REJECTED refunds the reserved amount."""
-    from datetime import datetime, timezone
-
-    if status not in ("paid", "rejected"):
-        raise ServiceError("Payout can only be marked paid or rejected")
-    async with transaction_scope(session):
-        payout = await session.get(Payout, payout_id)
-        if payout is None:
-            raise ServiceError(f"Payout {payout_id} not found")
-        if payout.status is not PayoutStatus.REQUESTED:
-            return payout  # idempotent — already resolved
-        payout.status = PayoutStatus(status)
-        payout.admin_note = note.strip()
-        payout.resolved_at = datetime.now(timezone.utc)
-        seller_id = payout.seller_id
-        amount = payout.amount
-        refund = status == "rejected"
-    if refund:
-        await _add_agency_balance(session, seller_id, amount)
-    return payout
-
-
-async def list_payouts(
-    session: AsyncSession, seller_id: int | None = None, limit: int = 200
-) -> list[Payout]:
-    stmt = select(Payout).order_by(Payout.created_at.desc(), Payout.id.desc())
-    if seller_id is not None:
-        stmt = stmt.where(Payout.seller_id == seller_id)
-    async with transaction_scope(session):
-        return list(await session.scalars(stmt.limit(limit)))
-
-
-# --------------------------------------------------------------------------- #
-# Marketplace: seller trust (sales volume) + storefront visibility
-# --------------------------------------------------------------------------- #
-async def agency_sales_count(session: AsyncSession, seller_id: int) -> int:
-    """Completed (non-reversed) sales for an agency — a real trust signal."""
-    async with transaction_scope(session):
-        n = await session.scalar(
-            select(func.count(AgencyEarning.id)).where(
-                AgencyEarning.seller_id == seller_id,
-                AgencyEarning.status == AgencyEarningStatus.EARNED,
-            )
-        )
-    return int(n or 0)
-
-
-def seller_trust_label(sales: int) -> str:
-    """Honest, sales-based trust tier shown to buyers."""
-    if sales >= 100:
-        return f"⭐ Top seller · {sales} sales"
-    if sales >= 25:
-        return f"⭐ Trusted · {sales} sales"
-    if sales >= 1:
-        return f"{sales} sales"
-    return "New seller"
-
-
-async def product_visibility(
-    session: AsyncSession, product: Product
-) -> tuple[bool, str | None, int]:
-    """(visible, seller_name, sales_count) for storefront listing.
-
-    House products (no owner) always show with no seller. Agency products
-    show ONLY while their agency is approved — a suspended/pending agency's
-    products are hidden from buyers automatically.
-    """
-    if product.owner_id is None:
-        return True, None, 0
-    async with transaction_scope(session):
-        owner = await session.get(User, product.owner_id)
-    if owner is None or owner.agency_status != "approved":
-        return False, None, 0
-    sales = await agency_sales_count(session, owner.id)
-    return True, owner.agency_name, sales

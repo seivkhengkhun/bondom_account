@@ -114,37 +114,16 @@ async def logout() -> RedirectResponse:
 # --------------------------------------------------------------------------- #
 # Catalog
 # --------------------------------------------------------------------------- #
-async def _catalog() -> tuple[list, bool, dict[int, str]]:
-    """Buyable products, stock-visibility flag, and {product_id: seller label}.
-
-    Products owned by a non-approved (pending/suspended) agency are hidden
-    from the storefront entirely. House products always show. The seller
-    label carries the agency name plus its sales-based trust tier.
-    """
+async def _catalog() -> tuple[list, bool]:
     async with AsyncSessionLocal() as session:
         overviews = await services.list_product_overviews(session)
         show_stock = await services.get_bot_show_stock(session)
-        visible: list = []
-        sellers: dict[int, str] = {}
-        for o in overviews:
-            if not o.product.is_active:
-                continue
-            ok, seller_name, sales = await services.product_visibility(
-                session, o.product
-            )
-            if not ok:
-                continue  # suspended/pending agency — hide from buyers
-            visible.append(o)
-            if seller_name:
-                sellers[o.product.id] = (
-                    f"{seller_name} · {services.seller_trust_label(sales)}"
-                )
-    return visible, show_stock, sellers
+    return [o for o in overviews if o.product.is_active], show_stock
 
 
 @router.get("/", response_class=HTMLResponse)
 async def home(request: Request) -> HTMLResponse:
-    active, show_stock, sellers = await _catalog()
+    active, show_stock = await _catalog()
     grouped: dict[str, list] = {}
     for o in active:
         grouped.setdefault(o.product.category or "Other", []).append(o)
@@ -153,7 +132,6 @@ async def home(request: Request) -> HTMLResponse:
         "home.html",
         grouped=grouped,
         show_stock=show_stock,
-        sellers=sellers,
         login_failed=request.query_params.get("login") == "failed",
         error=request.query_params.get("error", ""),
     )
@@ -161,7 +139,7 @@ async def home(request: Request) -> HTMLResponse:
 
 @router.get("/p/{product_id}", response_class=HTMLResponse)
 async def product_page(request: Request, product_id: int) -> HTMLResponse:
-    active, show_stock, sellers = await _catalog()
+    active, show_stock = await _catalog()
     selected = next((o for o in active if o.product.id == product_id), None)
     if selected is None:
         return RedirectResponse("/")  # type: ignore[return-value]
@@ -173,7 +151,6 @@ async def product_page(request: Request, product_id: int) -> HTMLResponse:
         o=selected,
         note=note,
         show_stock=show_stock,
-        seller_name=sellers.get(product_id),
         error=request.query_params.get("error", ""),
     )
 
@@ -609,265 +586,4 @@ async def my_sms_orders(request: Request):
         "sms_orders.html",
         orders=orders,
         balance=f"{balance:.2f}",
-    )
-
-
-# --------------------------------------------------------------------------- #
-# Marketplace — become a seller (agency) application + status
-# --------------------------------------------------------------------------- #
-@router.get("/seller", response_class=HTMLResponse)
-async def seller_home(request: Request):
-    user = await _session_user(request)
-    if user is None:
-        return RedirectResponse("/")
-    async with AsyncSessionLocal() as session:
-        fresh = await session.get(services.User, user.id)
-        status = fresh.agency_status if fresh else None
-        agency_name = fresh.agency_name if fresh else ""
-        balance = await services.get_agency_balance(session, user.id)
-        commission = await services.get_commission_rate(session)
-    return await _render(
-        request,
-        "seller.html",
-        status=status,
-        agency_name=agency_name or "",
-        balance=f"{balance:.2f}",
-        commission_pct=f"{commission * 100:.0f}",
-        error=request.query_params.get("error", ""),
-        success=request.query_params.get("success", ""),
-    )
-
-
-@router.post("/seller/apply")
-async def seller_apply(
-    request: Request,
-    agency_name: str = Form(...),
-    payout_contact: str = Form(...),
-):
-    user = await _session_user(request)
-    if user is None:
-        return RedirectResponse("/", status_code=303)
-    from urllib.parse import quote
-
-    try:
-        async with AsyncSessionLocal() as session:
-            await services.apply_as_agency(
-                session, user.id, agency_name, payout_contact
-            )
-    except services.ServiceError as exc:
-        return RedirectResponse(
-            "/seller?error=" + quote(str(exc)), status_code=303
-        )
-    return RedirectResponse(
-        "/seller?success=" + quote("Application submitted — awaiting approval."),
-        status_code=303,
-    )
-
-
-# --------------------------------------------------------------------------- #
-# Seller dashboard — approved agencies manage their own products
-# --------------------------------------------------------------------------- #
-async def _require_approved_agency(request: Request):
-    user = await _session_user(request)
-    if user is None:
-        return None
-    async with AsyncSessionLocal() as session:
-        if not await services.is_approved_agency(session, user.id):
-            return None
-    return user
-
-
-@router.get("/seller/products", response_class=HTMLResponse)
-async def seller_products(request: Request):
-    user = await _require_approved_agency(request)
-    if user is None:
-        return RedirectResponse("/seller")
-    from decimal import Decimal
-
-    async with AsyncSessionLocal() as session:
-        overviews = await services.list_agency_product_overviews(session, user.id)
-        balance = await services.get_agency_balance(session, user.id)
-        commission = await services.get_commission_rate(session)
-    earned = sum((o.revenue for o in overviews), Decimal("0"))
-    return await _render(
-        request,
-        "seller_products.html",
-        overviews=overviews,
-        balance=f"{balance:.2f}",
-        keep_pct=f"{(1 - commission) * 100:.0f}",
-        commission_pct=f"{commission * 100:.0f}",
-        error=request.query_params.get("error", ""),
-        success=request.query_params.get("success", ""),
-    )
-
-
-@router.post("/seller/products/new")
-async def seller_product_new(
-    request: Request,
-    name: str = Form(...),
-    price: str = Form(...),
-    category: str = Form(...),
-    warranty_days: str = Form("0"),
-):
-    user = await _require_approved_agency(request)
-    if user is None:
-        return RedirectResponse("/seller", status_code=303)
-    from decimal import Decimal, InvalidOperation
-    from urllib.parse import quote
-    from shared.schemas import ProductCreate
-
-    try:
-        payload = ProductCreate(
-            name=name.strip(),
-            price=Decimal(price or "0"),
-            category=(category.strip() or "general"),
-            warranty_days=int(warranty_days or "0"),
-        )
-    except (InvalidOperation, ValueError) as exc:
-        return RedirectResponse(
-            "/seller/products?error=" + quote(f"Invalid input: {exc}"),
-            status_code=303,
-        )
-    async with AsyncSessionLocal() as session:
-        product = await services.create_agency_product(session, user.id, payload)
-    return RedirectResponse(
-        "/seller/products?success=" + quote(f"Published '{product.name}'."),
-        status_code=303,
-    )
-
-
-@router.post("/seller/products/{product_id}/stock")
-async def seller_add_stock(
-    request: Request, product_id: int, lines: str = Form(...)
-):
-    user = await _require_approved_agency(request)
-    if user is None:
-        return RedirectResponse("/seller", status_code=303)
-    from urllib.parse import quote
-
-    items = lines.splitlines()
-    try:
-        async with AsyncSessionLocal() as session:
-            report = await services.agency_add_inventory(
-                session, user.id, product_id, items
-            )
-    except services.AgencyProductError as exc:
-        return RedirectResponse(
-            "/seller/products?error=" + quote(str(exc)), status_code=303
-        )
-    return RedirectResponse(
-        "/seller/products?success=" + quote(
-            f"Added {report.inserted} item(s)"
-            + (f", skipped {report.skipped_duplicate} duplicate(s)"
-               if report.skipped_duplicate else "")
-        ),
-        status_code=303,
-    )
-
-
-@router.post("/seller/products/{product_id}/price")
-async def seller_update_price(
-    request: Request, product_id: int, price: str = Form(...)
-):
-    user = await _require_approved_agency(request)
-    if user is None:
-        return RedirectResponse("/seller", status_code=303)
-    from decimal import Decimal, InvalidOperation
-    from urllib.parse import quote
-
-    try:
-        value = Decimal(price)
-    except InvalidOperation:
-        return RedirectResponse(
-            "/seller/products?error=Invalid+price", status_code=303
-        )
-    try:
-        async with AsyncSessionLocal() as session:
-            await services.agency_update_price(session, user.id, product_id, value)
-    except services.AgencyProductError as exc:
-        return RedirectResponse(
-            "/seller/products?error=" + quote(str(exc)), status_code=303
-        )
-    return RedirectResponse(
-        "/seller/products?success=Price+updated", status_code=303
-    )
-
-
-@router.post("/seller/products/{product_id}/toggle")
-async def seller_toggle(
-    request: Request, product_id: int, active: str = Form(...)
-):
-    user = await _require_approved_agency(request)
-    if user is None:
-        return RedirectResponse("/seller", status_code=303)
-    try:
-        async with AsyncSessionLocal() as session:
-            await services.agency_set_active(
-                session, user.id, product_id, active == "1"
-            )
-    except services.AgencyProductError:
-        pass
-    return RedirectResponse("/seller/products", status_code=303)
-
-
-# --------------------------------------------------------------------------- #
-# Seller payouts — withdraw earnings balance
-# --------------------------------------------------------------------------- #
-@router.get("/seller/payouts", response_class=HTMLResponse)
-async def seller_payouts(request: Request):
-    user = await _require_approved_agency(request)
-    if user is None:
-        return RedirectResponse("/seller")
-    async with AsyncSessionLocal() as session:
-        balance = await services.get_agency_balance(session, user.id)
-        payouts = await services.list_payouts(session, seller_id=user.id, limit=50)
-        fresh = await session.get(services.User, user.id)
-        payout_contact = fresh.payout_contact if fresh else ""
-    return await _render(
-        request,
-        "seller_payouts.html",
-        balance=f"{balance:.2f}",
-        min_payout=f"{services.MIN_PAYOUT:.2f}",
-        payout_contact=payout_contact or "",
-        payouts=payouts,
-        error=request.query_params.get("error", ""),
-        success=request.query_params.get("success", ""),
-    )
-
-
-@router.post("/seller/payouts/request")
-async def seller_request_payout(
-    request: Request, amount: str = Form(...), method: str = Form("")
-):
-    user = await _require_approved_agency(request)
-    if user is None:
-        return RedirectResponse("/seller", status_code=303)
-    from decimal import Decimal, InvalidOperation
-    from urllib.parse import quote
-
-    try:
-        value = Decimal(amount)
-    except InvalidOperation:
-        return RedirectResponse(
-            "/seller/payouts?error=Invalid+amount", status_code=303
-        )
-    try:
-        async with AsyncSessionLocal() as session:
-            await services.request_payout(session, user.id, value, method)
-    except services.InsufficientBalanceError as exc:
-        return RedirectResponse(
-            "/seller/payouts?error=" + quote(
-                f"You only have ${exc.balance:.2f} available"
-            ),
-            status_code=303,
-        )
-    except services.ServiceError as exc:
-        return RedirectResponse(
-            "/seller/payouts?error=" + quote(str(exc)), status_code=303
-        )
-    return RedirectResponse(
-        "/seller/payouts?success=" + quote(
-            "Payout requested — we'll process it shortly."
-        ),
-        status_code=303,
     )
