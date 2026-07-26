@@ -23,6 +23,7 @@
 
       <form method="post" action="/web/wallet/topup" id="topup-form"
             class="stack" style="margin-top:var(--sp-5)">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <div class="field">
           <label class="label" for="amount">Top-up amount</label>
           <div class="input-prefixed">

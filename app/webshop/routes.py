@@ -23,6 +23,9 @@ from shared.database import AsyncSessionLocal
 from shared.models import OrderStatus, Product
 
 from .auth import (
+    CSRF_FIELD,
+    check_csrf,
+    csrf_token,
     SESSION_COOKIE,
     SESSION_TTL_SECONDS,
     read_session,
@@ -74,6 +77,7 @@ async def _render(request: Request, template: str, **context) -> HTMLResponse:
     context.setdefault("bot_username", await _get_bot_username())
     context.setdefault("auth_url", _auth_url(request))
     context.setdefault("sms_enabled", settings.sms_enabled)
+    context.setdefault("csrf_token", csrf_token(_current_session(request)))
     return templates.TemplateResponse(
         request=request, name=template, context=context
     )
@@ -94,12 +98,16 @@ async def auth_telegram(request: Request) -> RedirectResponse:
         await services.get_or_create_user(session, telegram_id, username)
 
     response = RedirectResponse(request.query_params.get("next") or "/")
+    host = request.headers.get("host", "")
+    is_local = host.startswith(("127.", "localhost", "0.0.0.0"))
     response.set_cookie(
         SESSION_COOKIE,
         sign_session(telegram_id, username),
         max_age=SESSION_TTL_SECONDS,
         httponly=True,
         samesite="lax",
+        # Never let the session cookie travel over plaintext in production.
+        secure=not is_local,
     )
     return response
 
@@ -163,10 +171,18 @@ async def web_buy(
     request: Request,
     product_id: int = Form(...),
     quantity: int = Form(1),
+    csrf_token: str = Form(""),
 ):
     sess = _current_session(request)
     if sess is None:
         return RedirectResponse(f"/p/{product_id}", status_code=303)
+    if not check_csrf(sess, csrf_token):
+        return RedirectResponse(
+            f"/p/{product_id}?error=" + quote_plus(
+                "Your session expired. Please try again."
+            ),
+            status_code=303,
+        )
     quantity = max(1, min(quantity, 100))
 
     from shared.schemas import OrderCreate
@@ -367,10 +383,17 @@ async def wallet_page(request: Request):
 
 
 @router.post("/web/wallet/topup")
-async def wallet_topup(request: Request, amount: str = Form(...)):
+async def wallet_topup(
+    request: Request, amount: str = Form(...), csrf_token: str = Form("")
+):
     user = await _session_user(request)
     if user is None:
         return RedirectResponse("/", status_code=303)
+    if not check_csrf(_current_session(request), csrf_token):
+        return RedirectResponse(
+            "/wallet?error=" + quote_plus("Your session expired. Please try again."),
+            status_code=303,
+        )
     try:
         value = Decimal(amount.strip().replace(",", "")).quantize(
             Decimal("0.01")
@@ -482,7 +505,13 @@ async def sms_buy(
     request: Request,
     category: str = Form(...),
     country: str = Form(...),
+    csrf_token: str = Form(""),
 ):
+    if not check_csrf(_current_session(request), csrf_token):
+        return RedirectResponse(
+            "/sms?error=" + quote_plus("Your session expired. Please try again."),
+            status_code=303,
+        )
     if not settings.sms_enabled:
         return RedirectResponse("/", status_code=303)
     user = await _session_user(request)

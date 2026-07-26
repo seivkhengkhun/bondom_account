@@ -192,6 +192,7 @@ class AdminState(rx.State):
     del_message: str = ""
     del_done: bool = False
     del_reason_input: str = ""
+    del_is_deleted: bool = False
 
     # Activity log
     audit_rows: list[AuditRow] = []
@@ -962,6 +963,10 @@ class AdminState(rx.State):
         self.del_balance = f"{impact.balance:.2f}"
         self.del_can_delete = impact.can_delete
         self.del_reason = impact.blocked_reason
+        async with AsyncSessionLocal() as session:
+            self.del_is_deleted = await services.is_user_deleted(
+                session, user_id
+            )
 
     def set_del_reason(self, v: str) -> None:
         self.del_reason_input = v
@@ -970,6 +975,57 @@ class AdminState(rx.State):
         self.del_message = ""
         self.del_done = False
         self.del_reason_input = ""
+
+    async def soft_delete_user(self):
+        """Deactivate the account but keep everything, so it can come back."""
+        if not self.authed:
+            return
+        self.touch()
+        user_id = self.del_user_id
+        username = self.del_username
+        reason = self.del_reason_input.strip()
+
+        async with AsyncSessionLocal() as session:
+            await services.soft_delete_user(session, user_id, reason)
+
+        await audit.log_action(
+            audit.ACTION_USER_SOFT_DELETE,
+            target_type="user",
+            target_id=user_id,
+            summary=f"Deactivated {username} (recoverable)",
+            reason=reason,
+        )
+        self.del_done = True
+        self.del_is_deleted = True
+        self.del_message = (
+            f"{username} was deactivated. Nothing was destroyed — you can "
+            "restore this account at any time."
+        )
+        await self.load_all()
+        return rx.toast.success(f"Deactivated {username}")
+
+    async def restore_user(self):
+        if not self.authed:
+            return
+        self.touch()
+        user_id = self.del_user_id
+        username = self.del_username
+
+        async with AsyncSessionLocal() as session:
+            await services.restore_user(session, user_id)
+
+        await audit.log_action(
+            audit.ACTION_USER_RESTORE,
+            target_type="user",
+            target_id=user_id,
+            summary=f"Restored {username}",
+            reason=self.del_reason_input.strip(),
+        )
+        self.del_done = True
+        self.del_is_deleted = False
+        self.del_message = f"{username} was restored and can sign in again."
+        await self.load_all()
+        return rx.toast.success(f"Restored {username}")
 
     async def confirm_delete_user(self):
         if not self.authed:
@@ -2225,26 +2281,41 @@ def delete_user_dialog(u: UserRow) -> rx.Component:
                             width="100%",
                         ),
                         rx.cond(
-                            AdminState.del_can_delete,
+                            AdminState.del_is_deleted,
                             rx.callout(
-                                "This permanently deletes the user, their SMS "
-                                "orders, top-up sessions and wallet balance. "
-                                "This cannot be undone.",
-                                icon="triangle-alert",
-                                color_scheme="amber",
+                                "This account is deactivated. Nothing was "
+                                "destroyed — restoring it lets the user sign "
+                                "in and buy again.",
+                                icon="info",
+                                color_scheme="blue",
                                 size="1",
                                 width="100%",
                             ),
-                            rx.callout(
-                                AdminState.del_reason,
-                                icon="shield-alert",
-                                color_scheme="red",
-                                size="1",
-                                width="100%",
+                            rx.cond(
+                                AdminState.del_can_delete,
+                                rx.callout(
+                                    "Deactivate is reversible and keeps "
+                                    "everything. Delete permanently destroys "
+                                    "the user, their SMS orders, top-up "
+                                    "sessions and wallet balance.",
+                                    icon="triangle-alert",
+                                    color_scheme="amber",
+                                    size="1",
+                                    width="100%",
+                                ),
+                                rx.callout(
+                                    AdminState.del_reason
+                                    + " Deactivate instead — it is reversible "
+                                    "and keeps the order history.",
+                                    icon="shield-alert",
+                                    color_scheme="red",
+                                    size="1",
+                                    width="100%",
+                                ),
                             ),
                         ),
                         rx.cond(
-                            AdminState.del_can_delete,
+                            ~AdminState.del_is_deleted,
                             rx.vstack(
                                 rx.text(
                                     "Reason (recorded in the activity log)",
@@ -2287,13 +2358,35 @@ def delete_user_dialog(u: UserRow) -> rx.Component:
                     rx.cond(
                         AdminState.del_done,
                         rx.fragment(),
-                        rx.button(
-                            rx.icon("trash-2", size=15),
-                            "Delete permanently",
-                            color_scheme="red",
-                            disabled=~AdminState.del_can_delete,
-                            on_click=AdminState.confirm_delete_user,
-                            flex="1",
+                        rx.cond(
+                            AdminState.del_is_deleted,
+                            rx.button(
+                                rx.icon("rotate-ccw", size=15),
+                                "Restore account",
+                                color_scheme="green",
+                                on_click=AdminState.restore_user,
+                                flex="1",
+                            ),
+                            rx.hstack(
+                                rx.button(
+                                    rx.icon("user-x", size=15),
+                                    "Deactivate",
+                                    color_scheme="amber",
+                                    on_click=AdminState.soft_delete_user,
+                                    flex="1",
+                                ),
+                                rx.button(
+                                    rx.icon("trash-2", size=15),
+                                    "Delete",
+                                    color_scheme="red",
+                                    variant="soft",
+                                    disabled=~AdminState.del_can_delete,
+                                    on_click=AdminState.confirm_delete_user,
+                                    flex="1",
+                                ),
+                                spacing="2",
+                                width="100%",
+                            ),
                         ),
                     ),
                     spacing="2",

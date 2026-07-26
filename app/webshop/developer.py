@@ -15,6 +15,8 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from shared import api_keys
 from shared.database import AsyncSessionLocal
 
+from .auth import SESSION_COOKIE, check_csrf, read_session
+
 router = APIRouter(include_in_schema=False)
 
 
@@ -64,12 +66,19 @@ async def create_key(
     scope_read: str = Form(""),
     scope_orders: str = Form(""),
     scope_sms: str = Form(""),
+    csrf_token: str = Form(""),
 ):
     from app.webshop.routes import _session_user
 
     user = await _session_user(request)
     if user is None:
         return RedirectResponse("/", status_code=303)
+    if not check_csrf(read_session(request.cookies.get(SESSION_COOKIE)), csrf_token):
+        return RedirectResponse(
+            "/developer?error="
+            + quote_plus("Your session expired. Please try again."),
+            status_code=303,
+        )
 
     async with AsyncSessionLocal() as session:
         if await api_keys.count_active_keys(session, user.id) >= api_keys.MAX_KEYS_PER_USER:
@@ -100,12 +109,20 @@ async def create_key(
 
 
 @router.post("/developer/keys/{key_id}/revoke")
-async def revoke_key(request: Request, key_id: int):
+async def revoke_key(
+    request: Request, key_id: int, csrf_token: str = Form("")
+):
     from app.webshop.routes import _session_user
 
     user = await _session_user(request)
     if user is None:
         return RedirectResponse("/", status_code=303)
+    if not check_csrf(read_session(request.cookies.get(SESSION_COOKIE)), csrf_token):
+        return RedirectResponse(
+            "/developer?error="
+            + quote_plus("Your session expired. Please try again."),
+            status_code=303,
+        )
 
     async with AsyncSessionLocal() as session:
         ok = await api_keys.revoke_key(session, user.id, key_id)

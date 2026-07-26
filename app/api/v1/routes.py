@@ -24,6 +24,20 @@ router = APIRouter(prefix="/api/v1", tags=["public-api"])
 # --------------------------------------------------------------------------- #
 # Schemas
 # --------------------------------------------------------------------------- #
+class Page(BaseModel):
+    """Envelope for list endpoints.
+
+    Cursor-free offset paging: the dataset is small and admin-curated, so
+    a stable ``limit``/``offset`` is simpler for integrators than cursors
+    and cheap on an indexed table.
+    """
+
+    total: int
+    limit: int
+    offset: int
+    has_more: bool
+
+
 class ProductOut(BaseModel):
     id: int
     name: str
@@ -97,13 +111,19 @@ async def me(caller: CallerDep, db: SessionDep) -> BalanceOut:
 # --------------------------------------------------------------------------- #
 # Catalog
 # --------------------------------------------------------------------------- #
-@router.get("/products", response_model=list[ProductOut], summary="List products")
+class ProductPage(Page):
+    data: list[ProductOut]
+
+
+@router.get("/products", response_model=ProductPage, summary="List products")
 async def list_products(
     caller: CallerDep,
     db: SessionDep,
     category: str | None = Query(None),
     in_stock_only: bool = Query(False),
-) -> list[ProductOut]:
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+) -> ProductPage:
     caller.require("read")
     overviews = await services.list_product_overviews(db)
     out = []
@@ -124,7 +144,14 @@ async def list_products(
                 in_stock=o.available,
             )
         )
-    return out
+    window = out[offset : offset + limit]
+    return ProductPage(
+        total=len(out),
+        limit=limit,
+        offset=offset,
+        has_more=offset + limit < len(out),
+        data=window,
+    )
 
 
 @router.get(
@@ -213,13 +240,31 @@ async def create_order(
     return _order_out(order, delivered)
 
 
-@router.get("/orders", response_model=list[OrderOut], summary="Your orders")
+class OrderPage(Page):
+    data: list[OrderOut]
+
+
+@router.get("/orders", response_model=OrderPage, summary="Your orders")
 async def list_orders(
-    caller: CallerDep, db: SessionDep, limit: int = Query(50, ge=1, le=200)
-) -> list[OrderOut]:
+    caller: CallerDep,
+    db: SessionDep,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+) -> OrderPage:
     caller.require("read")
-    orders = await services.list_user_orders(db, caller.user.id, limit=limit)
-    return [_order_out(o) for o in orders]
+    # Fetch one window past the offset so has_more is accurate without a
+    # second COUNT query.
+    orders = await services.list_user_orders(
+        db, caller.user.id, limit=offset + limit + 1
+    )
+    window = orders[offset : offset + limit]
+    return OrderPage(
+        total=len(orders),
+        limit=limit,
+        offset=offset,
+        has_more=len(orders) > offset + limit,
+        data=[_order_out(o) for o in window],
+    )
 
 
 @router.get("/orders/{order_id}", response_model=OrderOut, summary="Get one order")

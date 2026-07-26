@@ -289,6 +289,81 @@ async def get_user_delete_impact(
     )
 
 
+USER_DELETED_KEY_PREFIX = "user_deleted:"
+
+
+def _user_deleted_key(user_id: int) -> str:
+    return f"{USER_DELETED_KEY_PREFIX}{user_id}"
+
+
+async def is_user_deleted(session: AsyncSession, user_id: int) -> bool:
+    """True when the account is soft-deleted (disabled but recoverable)."""
+    async with transaction_scope(session):
+        return await session.get(AppSetting, _user_deleted_key(user_id)) is not None
+
+
+async def list_deleted_user_ids(session: AsyncSession) -> set[int]:
+    async with transaction_scope(session):
+        keys = (
+            await session.scalars(
+                select(AppSetting.key).where(
+                    AppSetting.key.like(f"{USER_DELETED_KEY_PREFIX}%")
+                )
+            )
+        ).all()
+    out: set[int] = set()
+    for key in keys:
+        try:
+            out.add(int(str(key).removeprefix(USER_DELETED_KEY_PREFIX)))
+        except ValueError:
+            continue
+    return out
+
+
+async def soft_delete_user(
+    session: AsyncSession, user_id: int, reason: str = ""
+) -> User:
+    """Disable an account without destroying anything.
+
+    Preferred over :func:`delete_user` because it works for *every* user,
+    including those with orders, and is reversible. The account is
+    deactivated so it cannot buy or sign in, and a marker row records that
+    the deactivation was a deletion rather than a plain suspension — the
+    two must stay distinguishable so restoring one does not silently
+    un-suspend the other.
+
+    Financial history, wallet balance and API keys are all left intact.
+    """
+    async with transaction_scope(session):
+        user = await session.get(User, user_id)
+        if user is None:
+            raise UserNotFoundError(user_id)
+
+        user.is_active = False
+        key = _user_deleted_key(user_id)
+        row = await session.get(AppSetting, key)
+        value = reason.strip()[:500] or "deleted"
+        if row is None:
+            session.add(AppSetting(key=key, value=value))
+        else:
+            row.value = value
+    return user
+
+
+async def restore_user(session: AsyncSession, user_id: int) -> User:
+    """Undo a soft delete and re-enable the account."""
+    async with transaction_scope(session):
+        user = await session.get(User, user_id)
+        if user is None:
+            raise UserNotFoundError(user_id)
+
+        row = await session.get(AppSetting, _user_deleted_key(user_id))
+        if row is not None:
+            await session.delete(row)
+        user.is_active = True
+    return user
+
+
 async def delete_user(session: AsyncSession, user_id: int) -> UserDeleteImpact:
     """Permanently remove a user that has no orders.
 

@@ -65,6 +65,33 @@ def read_session(cookie: str | None) -> dict | None:
     return data
 
 
+# --------------------------------------------------------------------------- #
+# CSRF
+# --------------------------------------------------------------------------- #
+CSRF_FIELD = "csrf_token"
+
+
+def csrf_token(session: dict | None) -> str:
+    """Token bound to the signed-in identity.
+
+    Derived from the same secret as the session cookie, so it needs no
+    server-side storage and survives restarts. The session cookie is
+    SameSite=Lax, which already blocks cross-site form POSTs in current
+    browsers; this is the second lock, because these endpoints move money.
+    """
+    if not session:
+        return ""
+    msg = f"csrf:{session.get('tid')}".encode()
+    return hmac.new(_session_key(), msg, hashlib.sha256).hexdigest()
+
+
+def check_csrf(session: dict | None, submitted: str | None) -> bool:
+    expected = csrf_token(session)
+    if not expected or not submitted:
+        return False
+    return hmac.compare_digest(submitted, expected)
+
+
 def verify_telegram_login(params: dict[str, str]) -> dict[str, str] | None:
     """Validate a Telegram Login Widget callback (returns fields or None).
 

@@ -95,6 +95,7 @@
                 <form method="post" action="/web/sms/buy" class="sms-buy-form">
                   <input type="hidden" name="category" value="{{ category }}">
                   <input type="hidden" name="country" value="{{ offer.code }}">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                   <button type="submit" class="btn btn-primary btn-sm">Get number</button>
                 </form>
               {% else %}

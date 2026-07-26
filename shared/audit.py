@@ -24,6 +24,8 @@ logger = logging.getLogger(__name__)
 # Action names used across the panel. Kept as constants so the Activity
 # tab can filter on them without matching free text.
 ACTION_USER_DELETE = "user.delete"
+ACTION_USER_SOFT_DELETE = "user.deactivate"
+ACTION_USER_RESTORE = "user.restore"
 ACTION_USER_BLOCK = "user.block"
 ACTION_USER_UNBLOCK = "user.unblock"
 ACTION_USER_SUSPEND = "user.suspend"

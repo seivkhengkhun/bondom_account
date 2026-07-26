@@ -93,6 +93,7 @@
               {% if k.is_active %}
                 <form method="post" action="/developer/keys/{{ k.id }}/revoke"
                       onsubmit="return confirm('Revoke this key? Any integration using it will stop working immediately.')">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                   <button type="submit" class="btn btn-danger btn-sm">Revoke</button>
                 </form>
               {% else %}
@@ -108,6 +109,7 @@
       {% endif %}
 
       <form method="post" action="/developer/keys" class="stack">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <div class="field">
           <label class="label" for="key-name">Key name</label>
           <input class="input" id="key-name" name="name" maxlength="64"

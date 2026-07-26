@@ -76,6 +76,7 @@
         {% if o.available > 0 %}
           <form method="post" action="/web/buy" id="buy-form" style="margin-top:var(--sp-5)">
             <input type="hidden" name="product_id" value="{{ o.product.id }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 
             <div class="field">
               <label class="label" for="qty">Quantity</label>
