@@ -168,6 +168,19 @@ class AdminState(rx.State):
     wallet_message: str = ""
     wallet_ok: bool = False
 
+    # Delete-user dialog
+    del_user_id: int = 0
+    del_username: str = ""
+    del_telegram_id: str = ""
+    del_orders: int = 0
+    del_sms: int = 0
+    del_topups: int = 0
+    del_balance: str = "0.00"
+    del_can_delete: bool = False
+    del_reason: str = ""
+    del_message: str = ""
+    del_done: bool = False
+
     # Table search boxes
     product_search: str = ""
     order_search: str = ""
@@ -870,6 +883,59 @@ class AdminState(rx.State):
     def close_wallet_dialog(self) -> None:
         self.wallet_message = ""
         self.user_adjust_amount = ""
+
+    # ------------------------------------------------------------- #
+    # Delete user
+    # ------------------------------------------------------------- #
+    async def open_delete_dialog(self, user_id: int) -> None:
+        """Load what deleting this user would destroy, before confirming."""
+        if not self.authed:
+            return
+        self.touch()
+        self.del_message = ""
+        self.del_done = False
+        async with AsyncSessionLocal() as session:
+            impact = await services.get_user_delete_impact(session, user_id)
+
+        self.del_user_id = impact.user_id
+        self.del_username = impact.username or f"#{impact.user_id}"
+        self.del_telegram_id = impact.telegram_id
+        self.del_orders = impact.orders
+        self.del_sms = impact.sms_orders
+        self.del_topups = impact.topups
+        self.del_balance = f"{impact.balance:.2f}"
+        self.del_can_delete = impact.can_delete
+        self.del_reason = impact.blocked_reason
+
+    def close_delete_dialog(self) -> None:
+        self.del_message = ""
+        self.del_done = False
+
+    async def confirm_delete_user(self):
+        if not self.authed:
+            return
+        self.touch()
+        user_id = self.del_user_id
+        username = self.del_username
+
+        try:
+            async with AsyncSessionLocal() as session:
+                await services.delete_user(session, user_id)
+        except services.UserHasOrdersError as exc:
+            # Re-checked server-side, so a stale dialog cannot force it.
+            self.del_can_delete = False
+            self.del_message = str(exc)
+            return
+        except services.UserNotFoundError:
+            self.del_message = "That user no longer exists."
+            self.del_done = True
+            await self.load_all()
+            return
+
+        self.del_done = True
+        self.del_message = f"{username} was permanently deleted."
+        await self.load_all()
+        return rx.toast.success(f"Deleted {username}")
 
     def _wallet_amount(self) -> Decimal | None:
         """Parse the entered amount, setting an error message if invalid."""
@@ -1994,8 +2060,142 @@ def _user_row(u: UserRow) -> rx.Component:
                 ),
             )
         ),
-        rx.table.cell(wallet_dialog(u)),
+        rx.table.cell(
+            rx.hstack(
+                wallet_dialog(u),
+                delete_user_dialog(u),
+                spacing="2",
+            )
+        ),
         align="center",
+    )
+
+
+def _impact_row(label: str, value, danger: bool = False) -> rx.Component:
+    return rx.hstack(
+        rx.text(label, size="2", color_scheme="gray"),
+        rx.spacer(),
+        rx.text(
+            value,
+            size="2",
+            weight="medium",
+            color_scheme=rx.cond(danger, "red", "gray"),
+        ),
+        width="100%",
+    )
+
+
+def delete_user_dialog(u: UserRow) -> rx.Component:
+    """Permanently remove a user, after showing exactly what is destroyed."""
+    return rx.dialog.root(
+        rx.dialog.trigger(
+            rx.button(
+                rx.icon("trash-2", size=14),
+                size="1",
+                color_scheme="red",
+                variant="soft",
+                on_click=lambda: AdminState.open_delete_dialog(u.id),
+            )
+        ),
+        rx.dialog.content(
+            rx.dialog.title("Delete user"),
+            rx.dialog.description(
+                rx.hstack(
+                    rx.text(AdminState.del_username, weight="bold"),
+                    rx.text("·", color_scheme="gray"),
+                    rx.text(AdminState.del_telegram_id, size="2",
+                            color_scheme="gray"),
+                    spacing="2",
+                    align="center",
+                ),
+                size="2",
+            ),
+            rx.vstack(
+                rx.cond(
+                    AdminState.del_done,
+                    rx.callout(
+                        AdminState.del_message,
+                        icon="circle-check",
+                        color_scheme="green",
+                        size="1",
+                        width="100%",
+                    ),
+                    rx.fragment(
+                        rx.vstack(
+                            _impact_row("Orders", AdminState.del_orders,
+                                        AdminState.del_orders > 0),
+                            _impact_row("SMS orders", AdminState.del_sms),
+                            _impact_row("Wallet top-ups", AdminState.del_topups),
+                            _impact_row(
+                                "Wallet balance",
+                                f"${AdminState.del_balance}",
+                                AdminState.del_balance != "0.00",
+                            ),
+                            spacing="2",
+                            width="100%",
+                        ),
+                        rx.cond(
+                            AdminState.del_can_delete,
+                            rx.callout(
+                                "This permanently deletes the user, their SMS "
+                                "orders, top-up sessions and wallet balance. "
+                                "This cannot be undone.",
+                                icon="triangle-alert",
+                                color_scheme="amber",
+                                size="1",
+                                width="100%",
+                            ),
+                            rx.callout(
+                                AdminState.del_reason,
+                                icon="shield-alert",
+                                color_scheme="red",
+                                size="1",
+                                width="100%",
+                            ),
+                        ),
+                        rx.cond(
+                            AdminState.del_message != "",
+                            rx.callout(
+                                AdminState.del_message,
+                                icon="triangle-alert",
+                                color_scheme="red",
+                                size="1",
+                                width="100%",
+                            ),
+                        ),
+                    ),
+                ),
+                rx.hstack(
+                    rx.dialog.close(
+                        rx.button(
+                            rx.cond(AdminState.del_done, "Done", "Cancel"),
+                            variant="soft",
+                            color_scheme="gray",
+                            on_click=AdminState.close_delete_dialog,
+                            flex="1",
+                        )
+                    ),
+                    rx.cond(
+                        AdminState.del_done,
+                        rx.fragment(),
+                        rx.button(
+                            rx.icon("trash-2", size=15),
+                            "Delete permanently",
+                            color_scheme="red",
+                            disabled=~AdminState.del_can_delete,
+                            on_click=AdminState.confirm_delete_user,
+                            flex="1",
+                        ),
+                    ),
+                    spacing="2",
+                    width="100%",
+                ),
+                spacing="3",
+                width="100%",
+                margin_top="1em",
+            ),
+            max_width="26em",
+        ),
     )
 
 
@@ -2147,7 +2347,7 @@ def users_tab() -> rx.Component:
                             rx.table.column_header_cell("Status"),
                             rx.table.column_header_cell("Active"),
                             rx.table.column_header_cell("Block"),
-                            rx.table.column_header_cell("Adjust wallet"),
+                            rx.table.column_header_cell("Actions"),
                         )
                     ),
                     rx.table.body(

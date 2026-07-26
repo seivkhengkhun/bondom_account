@@ -23,7 +23,9 @@ from shared.models import (
     OrderStatus,
     Payment,
     Product,
+    SmsOrder,
     User,
+    WalletTopup,
 )
 from shared.schemas import OrderCreate, ProductCreate
 
@@ -100,6 +102,17 @@ class InsufficientBalanceError(ServiceError):
         self.balance = balance
         super().__init__(
             f"User {user_id} balance {balance:.2f} is less than required {required:.2f}"
+        )
+
+
+class UserHasOrdersError(ServiceError):
+    """Refuses to delete a user whose orders are financial history."""
+
+    def __init__(self, user_id: int, order_count: int) -> None:
+        self.user_id = user_id
+        self.order_count = order_count
+        super().__init__(
+            f"User {user_id} has {order_count} order(s) and cannot be deleted"
         )
 
 
@@ -211,6 +224,117 @@ async def toggle_user_status(
             raise UserPermanentlyBlockedError(user_id)
         user.is_active = is_active
     return user
+
+
+class UserDeleteImpact(NamedTuple):
+    """What deleting a user would destroy, for the confirmation dialog."""
+
+    user_id: int
+    username: str
+    telegram_id: str
+    orders: int
+    sms_orders: int
+    topups: int
+    balance: Decimal
+    can_delete: bool
+    blocked_reason: str
+
+
+async def get_user_delete_impact(
+    session: AsyncSession, user_id: int
+) -> UserDeleteImpact:
+    """Summarise what removing ``user_id`` would delete.
+
+    Read-only. Lets the admin see the consequences before confirming, and
+    tells them up front when deletion is refused.
+    """
+    async with transaction_scope(session):
+        user = await session.get(User, user_id)
+        if user is None:
+            raise UserNotFoundError(user_id)
+
+        orders = await session.scalar(
+            select(func.count()).select_from(Order).where(Order.user_id == user_id)
+        )
+        sms_orders = await session.scalar(
+            select(func.count())
+            .select_from(SmsOrder)
+            .where(SmsOrder.user_id == user_id)
+        )
+        topups = await session.scalar(
+            select(func.count())
+            .select_from(WalletTopup)
+            .where(WalletTopup.user_id == user_id)
+        )
+
+    balance = await get_user_balance(session, user_id)
+
+    reason = ""
+    if orders:
+        reason = (
+            f"This user has {orders} order(s). Orders are financial records "
+            "and are never deleted — suspend or block the user instead."
+        )
+
+    return UserDeleteImpact(
+        user_id=user_id,
+        username=user.username or "",
+        telegram_id=str(user.telegram_id),
+        orders=orders or 0,
+        sms_orders=sms_orders or 0,
+        topups=topups or 0,
+        balance=balance,
+        can_delete=not orders,
+        blocked_reason=reason,
+    )
+
+
+async def delete_user(session: AsyncSession, user_id: int) -> UserDeleteImpact:
+    """Permanently remove a user that has no orders.
+
+    Deletion is refused when the user has orders: ``orders.user_id`` is
+    declared ``ondelete="RESTRICT"`` precisely because that history is a
+    financial record. SQLite does not enforce foreign keys by default
+    (``PRAGMA foreign_keys`` is 0 here), so the rule is enforced in Python
+    rather than trusted to the database — otherwise the delete would
+    silently orphan the orders and corrupt revenue reporting.
+
+    Everything genuinely owned by the user is removed in one transaction:
+    SMS orders, wallet top-ups, and the ``app_settings`` rows holding the
+    wallet balance and block flag.
+    """
+    impact = await get_user_delete_impact(session, user_id)
+    if not impact.can_delete:
+        raise UserHasOrdersError(user_id, impact.orders)
+
+    async with transaction_scope(session):
+        user = await session.get(User, user_id)
+        if user is None:
+            raise UserNotFoundError(user_id)
+
+        for row in (
+            await session.scalars(
+                select(SmsOrder).where(SmsOrder.user_id == user_id)
+            )
+        ).all():
+            await session.delete(row)
+
+        for row in (
+            await session.scalars(
+                select(WalletTopup).where(WalletTopup.user_id == user_id)
+            )
+        ).all():
+            await session.delete(row)
+
+        # Balance and block flag live in app_settings, not on the user row.
+        for key in (_user_balance_key(user_id), _user_block_key(user_id)):
+            setting = await session.get(AppSetting, key)
+            if setting is not None:
+                await session.delete(setting)
+
+        await session.delete(user)
+
+    return impact
 
 
 async def list_users(session: AsyncSession, limit: int = 200) -> list[User]:
