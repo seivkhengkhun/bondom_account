@@ -7,12 +7,13 @@ or together with the bot via:
 """
 
 import asyncio
+import hmac
 import logging
 from contextlib import asynccontextmanager
 from collections.abc import AsyncGenerator
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, Request, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -60,7 +61,40 @@ app = FastAPI(
     title="Bondom Account API",
     version="2.0.0",
     lifespan=lifespan,
+    # Internal schema is not published in production; the developer-facing
+    # documentation lives at /developer/docs.
+    docs_url="/docs" if settings.enable_internal_docs else None,
+    redoc_url="/redoc" if settings.enable_internal_docs else None,
+    openapi_url="/openapi.json" if settings.enable_internal_docs else None,
 )
+
+
+# --------------------------------------------------------------------------- #
+# Legacy internal API guard
+# --------------------------------------------------------------------------- #
+def require_internal(
+    x_internal_token: Annotated[str | None, Header()] = None,
+) -> None:
+    """Gate the pre-existing unauthenticated JSON endpoints.
+
+    These routes (/users, /products, /orders, /payments) accept writes and
+    had no authentication at all — they were reachable by anyone who could
+    talk to the port, with only an nginx rule standing in the way. Nothing
+    in the codebase calls them, so they now fail closed: without
+    INTERNAL_API_TOKEN they do not exist, and with it they require the
+    matching header. 404 rather than 401 so their existence is not
+    advertised.
+    """
+    expected = settings.internal_api_token
+    if not expected:
+        raise HTTPException(status_code=404, detail="Not Found")
+    if not x_internal_token or not hmac.compare_digest(
+        x_internal_token, expected
+    ):
+        raise HTTPException(status_code=404, detail="Not Found")
+
+
+InternalOnly = Depends(require_internal)
 
 # Customer web storefront — HTML pages sharing the same service layer.
 from pathlib import Path
@@ -93,6 +127,10 @@ app.include_router(api_v1_router)
 from app.webshop.developer import router as developer_router
 
 app.include_router(developer_router)
+
+from app.webshop.legal import router as legal_router
+
+app.include_router(legal_router)
 
 
 @app.exception_handler(ApiError)
@@ -208,6 +246,7 @@ async def not_found_handler(
     response_model=UserResponse,
     status_code=status.HTTP_201_CREATED,
     tags=["users"],
+    dependencies=[InternalOnly],
 )
 async def upsert_user(payload: UserUpsert, db: SessionDep) -> UserResponse:
     """Create or refresh a user record keyed by Telegram id."""
@@ -217,7 +256,12 @@ async def upsert_user(payload: UserUpsert, db: SessionDep) -> UserResponse:
     return UserResponse.model_validate(user)
 
 
-@app.patch("/users/{user_id}/status", response_model=UserResponse, tags=["users"])
+@app.patch(
+    "/users/{user_id}/status",
+    response_model=UserResponse,
+    tags=["users"],
+    dependencies=[InternalOnly],
+)
 async def set_user_status(
     user_id: int, payload: UserStatusUpdate, db: SessionDep
 ) -> UserResponse:
@@ -234,6 +278,7 @@ async def set_user_status(
     response_model=ProductResponse,
     status_code=status.HTTP_201_CREATED,
     tags=["products"],
+    dependencies=[InternalOnly],
 )
 async def create_product(payload: ProductCreate, db: SessionDep) -> ProductResponse:
     """Create a new product in the catalog."""
@@ -241,7 +286,12 @@ async def create_product(payload: ProductCreate, db: SessionDep) -> ProductRespo
     return ProductResponse.model_validate(product)
 
 
-@app.get("/products/", response_model=list[ProductResponse], tags=["products"])
+@app.get(
+    "/products/",
+    response_model=list[ProductResponse],
+    tags=["products"],
+    dependencies=[InternalOnly],
+)
 async def list_products(db: SessionDep, only_active: bool = True) -> list[ProductResponse]:
     products = await services.list_products(db, only_active=only_active)
     return [ProductResponse.model_validate(p) for p in products]
@@ -255,6 +305,7 @@ async def list_products(db: SessionDep, only_active: bool = True) -> list[Produc
     response_model=OrderResponse,
     status_code=status.HTTP_201_CREATED,
     tags=["orders"],
+    dependencies=[InternalOnly],
 )
 async def create_order(payload: OrderCreate, db: SessionDep) -> OrderResponse:
     """Create an order and atomically allocate inventory to it.
@@ -274,6 +325,7 @@ async def create_order(payload: OrderCreate, db: SessionDep) -> OrderResponse:
     response_model=PaymentSessionResponse,
     status_code=status.HTTP_201_CREATED,
     tags=["payments"],
+    dependencies=[InternalOnly],
 )
 async def create_payment(payload: PaymentCreate, db: SessionDep) -> PaymentSessionResponse:
     """Start a KHQR payment session for a pending order.
@@ -297,6 +349,7 @@ async def create_payment(payload: PaymentCreate, db: SessionDep) -> PaymentSessi
     "/payments/{order_id}/check",
     response_model=OrderResponse,
     tags=["payments"],
+    dependencies=[InternalOnly],
 )
 async def check_payment(order_id: int, db: SessionDep) -> OrderResponse:
     """Manually verify the latest payment session for an order.

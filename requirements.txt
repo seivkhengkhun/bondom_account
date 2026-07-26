@@ -1,13 +1,18 @@
 # Core / shared
 sqlalchemy[asyncio]>=2.0.30
-asyncpg>=0.29.0
+aiosqlite>=0.20.0          # SQLite async driver — DATABASE_URL uses sqlite+aiosqlite
+asyncpg>=0.29.0            # PostgreSQL async driver (if DATABASE_URL is postgres)
 pydantic>=2.7.0
 pydantic-settings>=2.3.0
+python-dotenv>=1.0.0       # rxconfig.py loads the shared .env
 
 # API + web storefront
 fastapi>=0.115.0
 uvicorn[standard]>=0.30.0
 jinja2>=3.1.0
+python-multipart>=0.0.9    # required by FastAPI to parse Form() bodies
+httpx>=0.27.0              # SMS provider client
+certifi>=2024.2.2          # CA bundle for the Bakong TLS context
 
 # Telegram bot
 aiogram>=3.7.0
@@ -16,5 +21,12 @@ aiogram>=3.7.0
 bakong-khqr>=0.5.0
 qrcode[pil]>=7.4
 
-# Admin panel
-reflex>=0.6.0
+# Admin panel — pinned deliberately: deploy/admin-frontend.zip is built by
+# this exact version and the frontend/backend protocol is not compatible
+# across releases. Rebuild the zip if you change this.
+reflex==0.9.6.post1
+
+# Tests (safe to skip in production: pip install -r requirements.txt --no-deps
+# is not used, so these are small and harmless)
+pytest>=8.0.0
+pytest-asyncio>=0.23.0

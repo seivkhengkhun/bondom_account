@@ -45,6 +45,18 @@ class Settings(BaseSettings):
     # Reflex admin panel — empty password means nobody can log in.
     admin_password: str = ""
 
+    # Legacy internal JSON API (/users, /products, /orders, /payments).
+    # These predate the authenticated public API and nothing in the app
+    # calls them — the admin panel, bot and storefront all use the service
+    # layer directly. They are therefore DISABLED unless a token is set,
+    # so a missing nginx rule cannot expose unauthenticated writes.
+    internal_api_token: str = ""
+
+    # Serve FastAPI's own /docs and /openapi.json. Off in production: the
+    # developer-facing documentation lives at /developer/docs and this
+    # would otherwise publish the internal endpoints too.
+    enable_internal_docs: bool = False
+
     # SMS activation reseller API (Angkor Phone SMS) — website-only feature.
     sms_enabled: bool = False
     sms_api_key: str = ""

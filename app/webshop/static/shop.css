@@ -1548,3 +1548,127 @@ main.container {
   body { background: #fff; color: #000; }
   .card { border: 1px solid #ccc; box-shadow: none; }
 }
+
+/* ---------------------------------------------------------- legal pages */
+.legal-layout {
+  display: grid;
+  grid-template-columns: 14rem minmax(0, 1fr);
+  gap: var(--sp-8);
+  align-items: start;
+}
+.legal-nav {
+  position: sticky;
+  top: 5rem;
+  font-size: var(--fs-sm);
+}
+.legal-nav a { color: var(--text-secondary); }
+.legal-nav a:hover { color: var(--text); }
+.legal-nav a[aria-current="page"] {
+  color: var(--accent-text);
+  font-weight: var(--fw-semi);
+}
+
+/* Long-form prose: generous measure and vertical rhythm so a wall of
+   clauses stays readable. */
+.legal-body {
+  max-width: 46rem;
+  font-size: var(--fs-base);
+  line-height: 1.7;
+}
+.legal-body h2 {
+  font-size: var(--fs-lg);
+  margin-top: var(--sp-8);
+  margin-bottom: var(--sp-3);
+  padding-top: var(--sp-4);
+  border-top: 1px solid var(--border);
+}
+.legal-body h2:first-of-type { margin-top: var(--sp-5); }
+.legal-body h3 {
+  font-size: var(--fs-md);
+  margin-top: var(--sp-5);
+  margin-bottom: var(--sp-2);
+}
+.legal-body p { margin-bottom: var(--sp-4); color: var(--text-secondary); }
+.legal-body strong { color: var(--text); font-weight: var(--fw-semi); }
+.legal-body code {
+  background: var(--surface-2);
+  padding: 0.1em 0.4em;
+  border-radius: var(--r-xs);
+  font-size: 0.9em;
+}
+
+.legal-list {
+  display: grid;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-4);
+  padding-left: var(--sp-5);
+  list-style: disc;
+  color: var(--text-secondary);
+}
+.legal-list li { padding-left: var(--sp-1); }
+
+.legal-table-wrap { overflow-x: auto; margin-bottom: var(--sp-5); }
+.legal-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-sm);
+  min-width: 30rem;
+}
+.legal-table th,
+.legal-table td {
+  text-align: left;
+  padding: var(--sp-3);
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+.legal-table th {
+  color: var(--text-muted);
+  font-weight: var(--fw-semi);
+  font-size: var(--fs-xs);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.legal-table td { color: var(--text-secondary); }
+
+@media (max-width: 900px) {
+  .legal-layout { grid-template-columns: 1fr; gap: var(--sp-5); }
+  .legal-nav {
+    position: static;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: var(--sp-4);
+  }
+  .legal-nav ul {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--sp-2) var(--sp-4);
+  }
+}
+
+/* Grid and flex children default to min-width:auto, so a wide table
+   refuses to shrink and pushes the page wider than the viewport — the
+   overflow-x wrapper never gets a chance to scroll. Allowing them to
+   shrink is what makes the scroll container actually work. */
+.legal-layout > *,
+.legal-body,
+.legal-table-wrap,
+.stack > *,
+.stack-lg > *,
+.card { min-width: 0; }
+
+.legal-table-wrap { max-width: 100%; }
+
+/* Any table inside a card scrolls within the card rather than the page. */
+.card table { max-width: 100%; }
+.card > div[style*="overflow-x"] { min-width: 0; max-width: 100%; }
+
+/* Code samples contain long unbroken URLs; let them wrap rather than
+   widen the page on a narrow phone. */
+pre.input,
+pre.sdk-sample,
+.legal-body pre {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  overflow-x: auto;
+  max-width: 100%;
+}
+.cred-row code, .legal-body code { overflow-wrap: anywhere; }

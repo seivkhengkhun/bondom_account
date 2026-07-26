@@ -1,0 +1,65 @@
+{% extends "legal/_base.html" %}
+{% set effective = "26 July 2026" %}
+{% block document %}
+
+<p>Digital goods are delivered instantly and cannot be "returned", so
+  this policy sets out exactly when we refund, replace, or decline.</p>
+
+<h2>1. Automatic refunds</h2>
+<ul class="legal-list">
+  {% if sms_enabled %}
+  <li><strong>SMS number, no code received.</strong> If no verification
+    code arrives within the window shown on the order, the full amount is
+    returned to your wallet automatically. You do not need to ask.</li>
+  {% endif %}
+  <li><strong>Payment taken, nothing delivered.</strong> If a payment is
+    confirmed but stock could not be allocated, the amount is credited
+    back to your wallet.</li>
+  <li><strong>Duplicate credit or charge.</strong> Demonstrable errors on
+    our side are corrected, in either direction, and recorded in our
+    audit log.</li>
+</ul>
+
+<h2>2. Warranty replacements</h2>
+<p>Where a product lists a warranty period, and it stops working within
+  that period through no fault of your own, we will replace it from stock
+  or refund it to your wallet. Contact support with your order number.</p>
+<p>Warranty does not cover a product that stopped working because the
+  credentials were changed, shared, resold, or used in breach of the
+  underlying provider's terms.</p>
+
+<h2>3. When we do not refund</h2>
+<ul class="legal-list">
+  <li>You bought the wrong item, or changed your mind, after the item was
+    delivered. Credentials cannot be un-seen.</li>
+  <li>A product outside its warranty period stops working.</li>
+  <li>{% if sms_enabled %}A code arrived but you did not use it in time, or
+    the destination service rejected the number.{% else %}The destination
+    service rejected or restricted the account for reasons outside our
+    control.{% endif %}</li>
+  <li>The account was misused, or the loss was caused by breaching our
+    <a href="/legal/acceptable-use">Acceptable Use Policy</a>.</li>
+  <li>An API purchase made by your own integration, including one caused
+    by a bug in your code. See
+    <a href="/legal/developer-terms">Developer &amp; API Terms</a>.</li>
+</ul>
+
+<h2>4. Wallet balance</h2>
+<p>Refunds are made to your wallet balance, not back to your bank. Wallet
+  balance is prepaid credit for buying from us; it is not withdrawable as
+  cash except where the law requires it.</p>
+<p>If your balance was topped up in error and has not been spent, contact
+  us — we will look at it case by case.</p>
+
+<h2>5. How to ask</h2>
+<p>Message support with your <strong>order number</strong> and a short
+  description of what happened. Requests are normally answered within 48
+  hours. Please raise a warranty claim inside the warranty window; we
+  cannot verify a claim made after it has expired.</p>
+
+<h2>6. Chargebacks</h2>
+<p>Talk to us before disputing a payment with your bank. A chargeback on
+  a delivered digital product may result in the account being suspended
+  while the dispute is resolved.</p>
+
+{% endblock %}

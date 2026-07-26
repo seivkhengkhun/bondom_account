@@ -1,0 +1,66 @@
+{% extends "legal/_base.html" %}
+{% set effective = "26 July 2026" %}
+{% block document %}
+
+<p>This policy lists every cookie and browser storage item the site uses.
+  The list is short because we run no advertising and no third-party
+  analytics.</p>
+
+<h2>1. What we set</h2>
+<div class="legal-table-wrap">
+  <table class="legal-table">
+    <thead>
+      <tr><th>Name</th><th>Type</th><th>Purpose</th><th>Lifetime</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>bondom_session</code></td>
+        <td>Cookie — strictly necessary</td>
+        <td>Keeps you signed in after Telegram authentication. Signed with
+          HMAC-SHA256, HTTP-only, Secure in production, SameSite=Lax.
+          Contains your Telegram ID, username and an expiry — no
+          password, no payment data.</td>
+        <td>30 days</td>
+      </tr>
+      <tr>
+        <td><code>theme</code></td>
+        <td><code>localStorage</code> — preference</td>
+        <td>Remembers whether you chose the light or dark appearance.
+          Never sent to the server.</td>
+        <td>Until you clear it</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<h2>2. What we do not set</h2>
+<ul class="legal-list">
+  <li>No advertising or retargeting cookies.</li>
+  <li>No third-party analytics (no Google Analytics, no Meta Pixel).</li>
+  <li>No cross-site tracking or fingerprinting.</li>
+</ul>
+
+<h2>3. Third-party content</h2>
+<p>The sign-in button is the official Telegram Login Widget, loaded from
+  <code>telegram.org</code>. Loading it means Telegram can see that your
+  browser requested it, subject to Telegram's own privacy policy. It only
+  appears on pages where you are not already signed in.</p>
+
+<h2>4. Consent</h2>
+<p>The session cookie is strictly necessary to provide a service you
+  asked for — staying signed in — so it does not require consent under
+  the usual cookie rules. The theme preference is stored locally on your
+  own device and is never transmitted. Because we set no tracking
+  cookies, there is no consent banner to click through.</p>
+
+<h2>5. Controlling cookies</h2>
+<p>You can delete cookies and local storage in your browser settings.
+  Removing <code>bondom_session</code> signs you out; removing
+  <code>theme</code> returns the site to following your system
+  appearance. Neither affects your account, balance, or purchase
+  history.</p>
+
+<h2>6. Changes</h2>
+<p>If we ever add a cookie, this page is updated before it ships.</p>
+
+{% endblock %}

@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Legal — Bondom Account{% endblock %}
+{% block content %}
+  <div class="page-head">
+    <div>
+      <h1>Legal</h1>
+      <p class="sub">The documents that govern using Bondom Account.</p>
+    </div>
+  </div>
+
+  <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(17rem,1fr))">
+    {% for slug, (_, title, description) in documents.items() %}
+      <a class="card card-interactive reveal" href="/legal/{{ slug }}"
+         style="gap:var(--sp-2);padding:var(--sp-5)">
+        <h2 style="font-size:var(--fs-md)">{{ title }}</h2>
+        <p class="muted text-sm">{{ description }}</p>
+        <span class="pc-cta" style="margin-top:auto">
+          Read
+          <svg class="ic ic-sm" aria-hidden="true"><use href="#i-arrow-right"/></svg>
+        </span>
+      </a>
+    {% endfor %}
+  </div>
+{% endblock %}

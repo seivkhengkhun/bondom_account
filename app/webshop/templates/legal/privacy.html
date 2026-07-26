@@ -1,0 +1,172 @@
+{% extends "legal/_base.html" %}
+{% set effective = "26 July 2026" %}
+{% block document %}
+
+<p>This Privacy Policy explains what personal data Bondom Account
+  collects, why we collect it, how long we keep it, and what control you
+  have over it. It applies to our website, our Telegram bot, and our
+  public API.</p>
+
+<h2>1. Who is responsible</h2>
+<p>Bondom Account, operating in Cambodia, is the controller of the
+  personal data described here. Contact details are at the bottom of this
+  page.</p>
+
+<h2>2. What we collect</h2>
+<h3>Information you give us, through Telegram</h3>
+<p>When you sign in, Telegram passes us a signed set of fields. We store
+  only your <strong>Telegram numeric ID</strong> and your
+  <strong>username or first name</strong>. We do not receive your phone
+  number, your contacts, your messages, or your Telegram password.</p>
+
+<h3>Information created by using the service</h3>
+<ul class="legal-list">
+  <li><strong>Orders</strong> — what you bought, quantity, price, status,
+    and time.</li>
+  <li><strong>Wallet activity</strong> — top-up amounts, payment
+    references, and your current balance.</li>
+  <li><strong>Payment references</strong> — the transaction hash used to
+    verify a KHQR payment with Bakong. We never see or store your card
+    number, bank login, or account balance at your bank.</li>
+  {% if sms_enabled %}
+  <li><strong>SMS rentals</strong> — the service and country you chose,
+    the temporary number issued, and the verification code received, so
+    it can be shown to you and refunded if it never arrives.</li>
+  {% endif %}
+  <li><strong>API usage</strong> — if you create an API key: the request
+    method, path, response status, duration, and originating IP address.</li>
+</ul>
+
+<h3>Information collected automatically</h3>
+<p>Our server keeps standard operational logs (IP address, timestamp,
+  requested path, response status) for security and debugging. We do
+  <strong>not</strong> use third-party analytics, advertising trackers,
+  or profiling tools.</p>
+
+<h2>3. Why we use it, and our legal basis</h2>
+<div class="legal-table-wrap">
+  <table class="legal-table">
+    <thead>
+      <tr><th>Purpose</th><th>Data used</th><th>Basis</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Deliver what you bought</td><td>Telegram ID, orders</td><td>Performance of a contract</td></tr>
+      <tr><td>Take and credit payment</td><td>Payment references, balance</td><td>Performance of a contract</td></tr>
+      <tr><td>Support, refunds, warranty</td><td>Orders, wallet activity</td><td>Performance of a contract</td></tr>
+      <tr><td>Prevent fraud and abuse</td><td>Logs, IP, usage patterns</td><td>Legitimate interests</td></tr>
+      <tr><td>Keep accounting records</td><td>Orders, payments</td><td>Legal obligation</td></tr>
+      <tr><td>Run and secure the API</td><td>API keys, request logs</td><td>Legitimate interests</td></tr>
+    </tbody>
+  </table>
+</div>
+<p>We do not sell your data, and we do not use it for advertising.</p>
+
+<h2>4. Who we share it with</h2>
+<p>We share the minimum necessary with:</p>
+<ul class="legal-list">
+  <li><strong>Telegram</strong> — to authenticate you and deliver your
+    purchases to your chat.</li>
+  <li><strong>Bakong and participating banks</strong> — to generate and
+    verify KHQR payments.</li>
+  {% if sms_enabled %}
+  <li><strong>Our SMS provider</strong> — to rent a number on your
+    behalf. They receive the request, not your identity.</li>
+  {% endif %}
+  <li><strong>Our hosting provider</strong> — which stores the server and
+    database on our behalf.</li>
+</ul>
+<p>We may also disclose data where required by law, or to establish or
+  defend a legal claim. We will not hand over data on an informal request
+  without a lawful basis.</p>
+
+<h2>5. Where data is stored</h2>
+<p>Our database is hosted on a virtual private server. Data may be
+  processed outside Cambodia by the providers listed above, under their
+  own terms. Backups are retained for 14 days on a rolling basis.</p>
+
+<h2>6. How long we keep it</h2>
+<div class="legal-table-wrap">
+  <table class="legal-table">
+    <thead><tr><th>Data</th><th>Retention</th></tr></thead>
+    <tbody>
+      <tr><td>Account (Telegram ID, username)</td><td>While your account exists</td></tr>
+      <tr><td>Orders and payment records</td><td>Kept as accounting records even after account closure</td></tr>
+      <tr><td>Wallet balance</td><td>While your account exists</td></tr>
+      {% if sms_enabled %}<tr><td>SMS rentals and codes</td><td>While your account exists</td></tr>{% endif %}
+      <tr><td>API request logs</td><td>Rolling window for security and debugging</td></tr>
+      <tr><td>Admin audit log</td><td>Retained long-term — it is the record of who did what</td></tr>
+      <tr><td>Backups</td><td>14 days</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<h2>7. Deleting your account</h2>
+<p>You can ask us to delete your account at any time. What happens
+  depends on whether you have purchase history:</p>
+<ul class="legal-list">
+  <li><strong>No orders</strong> — the account, wallet balance, API keys
+    and any SMS rentals are permanently deleted.</li>
+  <li><strong>With orders</strong> — the account is deactivated so it can
+    no longer sign in or buy. Order and payment records are retained as
+    accounting records, because we are required to keep them. They are no
+    longer used for anything else.</li>
+</ul>
+<p>Deactivation is reversible; permanent deletion is not. Any remaining
+  wallet balance is forfeited on deletion unless you ask us about it
+  first, so contact us before requesting deletion if you hold a balance.</p>
+
+<h2>8. Your rights</h2>
+<p>Subject to applicable law, you can ask us to:</p>
+<ul class="legal-list">
+  <li>confirm what data we hold about you, and give you a copy;</li>
+  <li>correct data that is wrong;</li>
+  <li>delete your account, as described above;</li>
+  <li>restrict or object to a particular use;</li>
+  <li>export your data in a machine-readable form.</li>
+</ul>
+<p>Ask through the support contact below. We aim to respond within 30
+  days. We may need to confirm you control the Telegram account in
+  question before acting, so that no one can request someone else's data.</p>
+
+<h2>9. Security</h2>
+<p>Measures we actually apply, not aspirations:</p>
+<ul class="legal-list">
+  <li>Sign-in uses Telegram's signed login — we never handle your
+    Telegram password.</li>
+  <li>Session cookies are HMAC-signed, HTTP-only, marked Secure in
+    production, and set to SameSite=Lax.</li>
+  <li>State-changing forms carry an anti-CSRF token bound to your
+    session.</li>
+  <li>The admin password is stored as a salted PBKDF2-SHA256 hash, never
+    in plain text, and admin sessions time out after inactivity.</li>
+  <li>API keys are stored only as SHA-256 hashes; the key itself is shown
+    once and cannot be recovered by us.</li>
+  <li>Database access goes through parameterised queries, and page output
+    is escaped by default.</li>
+  <li>Privileged administrative actions are written to an audit log.</li>
+</ul>
+<p>No system is perfectly secure. If we discover a breach affecting your
+  personal data, we will notify affected users and any regulator we are
+  required to inform, without undue delay.</p>
+
+<h2>10. Children</h2>
+<p>The service is not intended for anyone under 18. We do not knowingly
+  collect data from children. If you believe a child has given us data,
+  contact us and we will delete it.</p>
+
+<h2>11. Cookies</h2>
+<p>See our <a href="/legal/cookies">Cookie Policy</a>. In short: we set
+  one cookie to keep you signed in, and store your light/dark theme
+  choice in your browser. There are no advertising or analytics cookies.</p>
+
+<h2>12. Changes</h2>
+<p>We may update this Policy. The effective date above always shows the
+  current version, and material changes will be announced before they
+  take effect.</p>
+
+<h2>13. Complaints</h2>
+<p>If you think we have mishandled your data, contact us first — we would
+  rather fix it directly. You may also complain to the data protection
+  authority in your country where one exists.</p>
+
+{% endblock %}

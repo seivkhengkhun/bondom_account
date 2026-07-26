@@ -1,0 +1,70 @@
+{% extends "legal/_base.html" %}
+{% set effective = "26 July 2026" %}
+{% block document %}
+
+<p>This policy applies to everyone using Bondom Account — the website,
+  the Telegram bot, and the API. Breaching it can lead to suspension or
+  termination under our <a href="/legal/terms">Terms of Service</a>.</p>
+
+<h2>1. Do not use the platform to commit fraud or crime</h2>
+<ul class="legal-list">
+  <li>No paying with stolen, cloned, or otherwise unauthorised payment
+    instruments.</li>
+  <li>No money laundering, and no using the wallet as a way to move value
+    between parties rather than to buy from us.</li>
+  <li>No impersonating another person or organisation.</li>
+  <li>No using purchased products to defraud, phish, or scam anyone.</li>
+</ul>
+
+<h2>2. Do not abuse the account or wallet system</h2>
+<ul class="legal-list">
+  <li>One account per person. No creating extra accounts to evade a
+    suspension, multiply rate limits, or repeat a one-time benefit.</li>
+  <li>No exploiting a bug, pricing error, or refund mechanism you know to
+    be unintended. Report it instead — we would rather fix it.</li>
+  <li>No abusing warranty or refund claims for products that in fact
+    work.</li>
+</ul>
+
+{% if sms_enabled %}
+<h2>3. Do not misuse SMS numbers</h2>
+<ul class="legal-list">
+  <li>No harassment, spam, threats, or unsolicited messaging.</li>
+  <li>No verifying accounts you intend to use for fraud or abuse.</li>
+  <li>No evading a ban or restriction imposed by another service.</li>
+  <li>No attaching a rented number to anything you need long-term — the
+    numbers are temporary and shared, and are not private to you.</li>
+</ul>
+{% endif %}
+
+<h2>4. Do not attack the infrastructure</h2>
+<ul class="legal-list">
+  <li>No probing, scanning, or attempting to bypass authentication,
+    authorisation, scopes, or rate limits.</li>
+  <li>No denial-of-service, no traffic floods, and no automated load that
+    degrades the service for others.</li>
+  <li>No accessing, or trying to access, another user's account, orders,
+    balance, API keys, or data.</li>
+  <li>No scraping at a volume or frequency that burdens the service.</li>
+</ul>
+
+<h2>5. Respect third-party terms</h2>
+<p>Products sold here relate to third-party services with their own
+  rules. You are responsible for complying with those rules when you use
+  what you buy. We do not authorise, and are not responsible for, any use
+  that breaches them.</p>
+
+<h2>6. Reporting</h2>
+<p>If you find a security vulnerability, tell us privately through the
+  support contact below before disclosing it publicly. We will not pursue
+  action against good-faith research that avoids privacy violations,
+  data destruction, and service degradation.</p>
+
+<h2>7. Enforcement</h2>
+<p>Depending on severity we may warn you, suspend the account, revoke API
+  keys, terminate the account, forfeit a balance obtained through the
+  conduct, or report the matter to the authorities. We aim to act
+  proportionately and to explain why, except where telling you would
+  compromise an investigation.</p>
+
+{% endblock %}

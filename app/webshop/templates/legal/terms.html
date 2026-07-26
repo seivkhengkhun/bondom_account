@@ -1,0 +1,162 @@
+{% extends "legal/_base.html" %}
+{% set effective = "26 July 2026" %}
+{% block document %}
+
+<p>These Terms of Service ("Terms") govern your use of Bondom Account
+  ("we", "us"), including our website, our Telegram bot, and our public
+  API. By creating an account, making a purchase, or using the API, you
+  agree to these Terms. If you do not agree, do not use the service.</p>
+
+<h2>1. Who may use the service</h2>
+<p>You must be at least 18 years old, or the age of majority where you
+  live, and legally able to enter into a contract. You must not be barred
+  from using the service under any applicable law or sanctions regime.</p>
+<p>One person may hold one account. Accounts are personal and may not be
+  sold, shared, or transferred.</p>
+
+<h2>2. Accounts and authentication</h2>
+<p>Sign-in is handled by the official Telegram Login Widget. We never see
+  or store a Telegram password. Your Bondom Account identity is tied to
+  your Telegram account, which means:</p>
+<ul class="legal-list">
+  <li>Anyone with access to your Telegram account can access your Bondom
+    Account, including your wallet balance.</li>
+  <li>Keeping your Telegram account secure is your responsibility. We
+    strongly recommend enabling Telegram's two-step verification.</li>
+  <li>If you lose access to your Telegram account, you may lose access to
+    your balance and purchase history. We cannot transfer a balance
+    between Telegram accounts.</li>
+</ul>
+<p>Tell us immediately if you believe your account has been used without
+  your permission.</p>
+
+<h2>3. Products and delivery</h2>
+<p>We sell digital goods — account credentials and, where offered,
+  temporary phone numbers for receiving verification codes. Products are
+  delivered electronically and immediately once payment is confirmed,
+  both on the website and to your Telegram chat.</p>
+<p>Stock is finite. A product shown as available may sell out between the
+  moment you load a page and the moment you pay; in that case the order
+  is not created and no money is taken.</p>
+<p>Where a product lists a warranty period, we will replace or refund a
+  product that stops working within that period, subject to our
+  <a href="/legal/refunds">Refund Policy</a>. Warranty does not cover
+  products that stop working because of your own use — for example
+  changing the credentials, sharing them, or breaching the terms of the
+  underlying third-party service.</p>
+
+<h2>4. Wallet, top-ups and payments</h2>
+<p>Payments are made by KHQR through Bakong and participating Cambodian
+  banks. We do not receive or store your card or bank credentials.</p>
+<ul class="legal-list">
+  <li>The minimum top-up is <strong>$2.00</strong>; the maximum is
+    <strong>$500.00</strong> per transaction.</li>
+  <li>Your wallet balance is a prepaid credit for buying from us. It is
+    <strong>not</strong> a bank deposit, it earns no interest, and it is
+    not transferable to another user or withdrawable as cash except where
+    required by law.</li>
+  <li>A top-up QR code expires 15 minutes after it is generated. Paying an
+    expired code, or paying an amount different from the one shown, may
+    delay or prevent automatic crediting. Contact support with your
+    transaction reference if this happens.</li>
+  <li>Balances are credited automatically once Bakong confirms the
+    payment. If a confirmation is delayed, the credit is applied when the
+    payment is verified.</li>
+</ul>
+<p>We may adjust a balance to correct a demonstrable error, such as a
+  double credit or a failed delivery. Every adjustment is recorded in our
+  internal audit log.</p>
+
+{% if sms_enabled %}
+<h2>5. SMS verification numbers</h2>
+<p>Where offered, SMS numbers are rented temporarily from a third-party
+  provider for the sole purpose of receiving a verification code. You
+  must not use them for fraud, impersonation, harassment, or to evade a
+  ban imposed by another service.</p>
+<p>Numbers are shared infrastructure and are not private to you. Do not
+  use them for anything you need to keep confidential, and do not attach
+  them to an account you rely on long-term — you will not be able to
+  receive a future code on the same number.</p>
+<p>If no code arrives within the displayed window, the rental is refunded
+  to your wallet automatically. Delivery depends on the upstream provider
+  and the destination service; we do not guarantee that any particular
+  code will arrive.</p>
+{% endif %}
+
+<h2>6. Acceptable use</h2>
+<p>Your use of the service is subject to our
+  <a href="/legal/acceptable-use">Acceptable Use Policy</a>, which forms
+  part of these Terms. In short: do not use the platform for fraud, do
+  not resell access in breach of a third party's terms, do not attack or
+  overload our infrastructure, and do not attempt to access another
+  user's account or data.</p>
+
+<h2>7. Developer API</h2>
+<p>Use of our public API is additionally governed by our
+  <a href="/legal/developer-terms">Developer &amp; API Terms</a>. API
+  purchases spend the same wallet balance as the website and the bot.</p>
+
+<h2>8. Suspension and termination</h2>
+<p>We may suspend or terminate an account, with or without notice, if we
+  reasonably believe it has been used to breach these Terms, to commit
+  fraud or a crime, to abuse the refund or warranty process, or in a way
+  that risks harm to us, our suppliers, or other users.</p>
+<p>Where we suspend rather than terminate, your data and balance are
+  preserved and the suspension can be reversed. Where an account is
+  terminated for fraud or abuse, any remaining balance obtained through
+  that conduct may be forfeited. You may close your own account at any
+  time — see <a href="/legal/privacy">Privacy Policy</a> for what happens
+  to your data.</p>
+
+<h2>9. Availability</h2>
+<p>We aim to keep the service available but do not promise uninterrupted
+  operation. We depend on third parties — Telegram, Bakong and
+  participating banks, and our SMS provider — and an outage at any of
+  them can interrupt sign-in, payment, delivery, or code reception.</p>
+<p>We may change, suspend, or discontinue any part of the service. Where
+  a change materially reduces what you have already paid for, we will
+  refund the affected amount to your wallet.</p>
+
+<h2>10. Intellectual property</h2>
+<p>The website, bot, API, and their design, text, and code belong to us
+  or our licensors. You may not copy, resell, or create derivative works
+  from them except as these Terms allow.</p>
+<p>Products you buy are delivered for your own use. We grant no rights in
+  any third-party trademark, and buying a product does not make you an
+  authorised representative of the underlying service.</p>
+
+<h2>11. Disclaimers and limitation of liability</h2>
+<p>To the fullest extent permitted by law, the service and everything in
+  it are provided "as is" and "as available", without warranties of any
+  kind, whether express or implied.</p>
+<p>To the fullest extent permitted by law, our total liability to you for
+  any claim arising out of or relating to the service is limited to the
+  greater of (a) the amount you paid us in the 90 days before the event
+  giving rise to the claim, or (b) $50 USD. We are not liable for
+  indirect, incidental, special, or consequential loss, including lost
+  profits, lost data, or loss of access to a third-party account.</p>
+<p>Nothing in these Terms excludes liability that cannot lawfully be
+  excluded, including liability for fraud or for death or personal injury
+  caused by negligence.</p>
+
+<h2>12. Indemnity</h2>
+<p>You agree to indemnify us against claims, losses, and reasonable costs
+  arising from your breach of these Terms or your misuse of the service.</p>
+
+<h2>13. Changes to these Terms</h2>
+<p>We may update these Terms. The effective date at the top of this page
+  always shows the current version. Material changes will be announced
+  through the bot or on the website before they take effect. Continuing
+  to use the service after that date means you accept the new Terms.</p>
+
+<h2>14. Governing law</h2>
+<p>These Terms are governed by the laws of the Kingdom of Cambodia, and
+  the courts of Cambodia have exclusive jurisdiction, except where
+  mandatory consumer law in your country of residence gives you the right
+  to bring a claim locally.</p>
+
+<h2>15. Contact</h2>
+<p>Questions, complaints, and legal notices can be sent through the
+  support contact at the bottom of this page.</p>
+
+{% endblock %}

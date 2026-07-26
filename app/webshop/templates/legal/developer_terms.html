@@ -1,0 +1,105 @@
+{% extends "legal/_base.html" %}
+{% set effective = "26 July 2026" %}
+{% block document %}
+
+<p>These Developer &amp; API Terms apply when you create an API key or
+  call our public API. They add to, and do not replace, our
+  <a href="/legal/terms">Terms of Service</a>.</p>
+
+<h2>1. Licence</h2>
+<p>We grant you a personal, non-exclusive, non-transferable, revocable
+  licence to call the API for the purpose of integrating Bondom Account
+  into your own site or application. You may not sublicense, resell, or
+  provide the API itself to others as a service.</p>
+
+<h2>2. API keys</h2>
+<ul class="legal-list">
+  <li>A key is shown once, at creation. We store only a SHA-256 hash and
+    cannot recover the key for you — if you lose it, create a new one.</li>
+  <li>Keys are secrets. Keep them server-side. Never put a key in
+    browser JavaScript, a mobile app binary, a public repository, or a
+    support message.</li>
+  <li>Every call made with your key is your responsibility, including
+    calls made by someone who obtained it from you.</li>
+  <li>Revoke a compromised key immediately in the
+    <a href="/developer">Developer Portal</a>. Revocation takes effect at
+    once.</li>
+  <li>We may revoke a key without notice if we believe it is compromised
+    or is being used in breach of these terms.</li>
+</ul>
+
+<h2>3. Scopes</h2>
+<p>Keys carry explicit scopes — <code>read</code>, <code>orders</code>,
+  <code>sms</code> — and a call outside a key's scopes is refused. Grant
+  each key the narrowest set that its integration actually needs. Do not
+  attempt to access data or endpoints outside your granted scopes.</p>
+
+<h2>4. Rate limits and fair use</h2>
+<p>Each key has a published per-minute limit. Every response returns your
+  current position in the <code>X-RateLimit-*</code> headers, and
+  exceeding the limit returns <code>429</code> with
+  <code>Retry-After</code>.</p>
+<p>You must respect those headers and back off rather than retrying
+  immediately. Do not run parallel clients to multiply your limit, create
+  extra accounts or keys to evade it, or poll faster than the data
+  actually changes. We may reduce a limit, or suspend a key, where usage
+  threatens service stability for others.</p>
+
+<h2>5. Purchases through the API</h2>
+<p>API purchases spend the wallet balance of the key's owner, exactly as
+  the website and bot do. There is no card flow in the API. You are
+  responsible for every purchase your integration makes — a bug in your
+  code that buys in a loop spends real money, and those purchases are not
+  automatically refundable.</p>
+<p>We strongly recommend testing against a small balance first, handling
+  <code>402 insufficient_balance</code> explicitly, and never retrying a
+  failed purchase blindly.</p>
+
+<h2>6. Your obligations to your users</h2>
+<p>If you resell or expose our products to your own users, you must:</p>
+<ul class="legal-list">
+  <li>make clear that you, not Bondom Account, are their counterparty;</li>
+  <li>not present yourself as an agent, partner, or official
+    representative of ours without written agreement;</li>
+  <li>publish your own terms and privacy notice covering the data you
+    collect;</li>
+  <li>handle your users' refund and support requests yourself, and not
+    direct them to us as first-line support.</li>
+</ul>
+
+<h2>7. Prohibited use</h2>
+<p>You must not use the API to scrape our catalogue wholesale for a
+  competing listing, to probe or attack our infrastructure, to
+  circumvent rate limits, scopes, or authentication, or for anything
+  prohibited by our
+  <a href="/legal/acceptable-use">Acceptable Use Policy</a>. Do not use
+  the API to enumerate identifiers belonging to other accounts; requests
+  for records you do not own are deliberately indistinguishable from
+  records that do not exist.</p>
+
+<h2>8. Changes to the API</h2>
+<p>The API is versioned. Within <code>/api/v1</code> we aim to make only
+  backward-compatible changes — adding fields or endpoints, never
+  removing or renaming what is already there. Build clients that ignore
+  unknown fields.</p>
+<p>Breaking changes will ship as a new version path. If we retire a
+  version, we will give reasonable notice through the Developer Portal
+  before it stops working.</p>
+
+<h2>9. No warranty; availability</h2>
+<p>The API is provided "as is". We do not offer an uptime guarantee or a
+  service level agreement. Endpoints that depend on third parties — most
+  obviously payments and SMS — can fail when those providers fail, and
+  will return a <code>503</code> when we detect it.</p>
+
+<h2>10. Suspension</h2>
+<p>We may suspend or terminate your API access for breach of these terms,
+  for abusive load, or where required by law. Where practical we will
+  tell you why and give you a chance to fix it first.</p>
+
+<h2>11. Support</h2>
+<p>Include the <code>request_id</code> from the error response when
+  reporting a problem — it identifies the exact call in our logs and is
+  the fastest route to an answer.</p>
+
+{% endblock %}

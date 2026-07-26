@@ -1,0 +1,50 @@
+{# Shared shell for every legal document.
+
+   A child template only needs to set `effective` and fill `document`:
+
+     {% extends "legal/_base.html" %}
+     {% set effective = "26 July 2026" %}
+     {% block document %} …sections… {% endblock %}
+#}
+{% extends "base.html" %}
+{% block title %}{{ doc_title }} — Bondom Account{% endblock %}
+
+{% block content %}
+  <nav class="breadcrumb" aria-label="Breadcrumb">
+    <a href="/legal">Legal</a>
+    <span class="sep" aria-hidden="true">/</span>
+    <span class="current">{{ doc_title }}</span>
+  </nav>
+
+  <div class="legal-layout">
+    <aside class="legal-nav" aria-label="Legal documents">
+      <p class="footer-title">Documents</p>
+      <ul class="stack-sm">
+        {% for slug, (_, title, _) in documents.items() %}
+          <li>
+            <a href="/legal/{{ slug }}"
+               {% if slug == current_slug %}aria-current="page"{% endif %}>{{ title }}</a>
+          </li>
+        {% endfor %}
+      </ul>
+    </aside>
+
+    <article class="legal-body">
+      <header style="margin-bottom:var(--sp-6)">
+        <h1>{{ doc_title }}</h1>
+        <p class="sub muted text-sm">
+          Effective {{ effective }} &middot; Bondom Account, Cambodia
+        </p>
+      </header>
+
+      {% block document %}{% endblock %}
+
+      <hr style="border:none;border-top:1px solid var(--border);margin-block:var(--sp-8) var(--sp-5)">
+      <p class="muted text-sm">
+        Questions about this document? Contact us at
+        <a href="https://t.me/{{ support_bot }}">@{{ support_bot }}</a>
+        or <code>{{ contact }}</code>.
+      </p>
+    </article>
+  </div>
+{% endblock %}
