@@ -3,27 +3,47 @@
 {% block content %}
   <section class="sms-hero">
     <div class="sms-hero-text">
-      <h1>📱 SMS Verification Numbers</h1>
-      <p class="hero-sub" style="margin-left:0">
-        Rent a real number, receive the Facebook or Instagram code here in
-        seconds. Paid from your wallet — no code means an automatic refund.</p>
+      <h1>SMS verification numbers</h1>
+      <p class="hero-sub" style="margin:0">
+        Rent a real number and receive your Facebook or Instagram code here in
+        seconds. Paid from your wallet — if no code arrives, you are refunded
+        automatically.
+      </p>
     </div>
+
     {% if session_user %}
-      <div class="sms-wallet-card">
-        <span class="muted" style="font-size:.8rem">Wallet balance</span>
-        <span class="sms-wallet-amt">${{ balance_str }}</span>
-        <a class="btn btn-primary btn-sm btn-block" href="/wallet">+ Top up</a>
-        <a class="btn btn-ghost btn-sm btn-block" href="/my/sms">My numbers →</a>
+      <div class="balance-card">
+        <span class="eyebrow">Wallet balance</span>
+        <span class="balance-amount">${{ balance_str }}</span>
+        <div class="stack-sm" style="margin-top:var(--sp-3)">
+          <a class="btn btn-primary btn-sm btn-block" href="/wallet">
+            <svg class="ic ic-sm" aria-hidden="true"><use href="#i-plus"/></svg> Top up
+          </a>
+          <a class="btn btn-ghost btn-sm btn-block" href="/my/sms">
+            My numbers
+            <svg class="ic ic-sm" aria-hidden="true"><use href="#i-arrow-right"/></svg>
+          </a>
+        </div>
       </div>
     {% endif %}
   </section>
 
-  {% if error %}<p class="alert error" role="alert">⚠ {{ error }}</p>{% endif %}
-  {% if stock_error %}<p class="alert error" role="alert">⚠ {{ stock_error }}</p>{% endif %}
+  {% if error %}
+    <p class="alert alert-error" role="alert" style="margin-bottom:var(--sp-4)">
+      <svg class="ic" aria-hidden="true"><use href="#i-alert"/></svg>
+      <span>{{ error }}</span>
+    </p>
+  {% endif %}
+  {% if stock_error %}
+    <p class="alert alert-warn" role="alert" style="margin-bottom:var(--sp-4)">
+      <svg class="ic" aria-hidden="true"><use href="#i-alert"/></svg>
+      <span>{{ stock_error }}</span>
+    </p>
+  {% endif %}
 
   {% if not session_user %}
-    <div class="login-box" id="signin">
-      <p>Sign in with Telegram to rent numbers:</p>
+    <div class="signin-panel" id="signin" style="margin-bottom:var(--sp-6)">
+      <p>Sign in with Telegram to rent a number.</p>
       <script async src="https://telegram.org/js/telegram-widget.js?22"
               data-telegram-login="{{ bot_username }}"
               data-size="large" data-auth-url="{{ auth_url }}"
@@ -32,42 +52,47 @@
   {% endif %}
 
   <div class="filter-bar" role="tablist" aria-label="SMS services">
-    <button class="pill active" data-svc="*" role="tab" aria-selected="true">All services</button>
+    <button class="pill" data-svc="*" role="tab" aria-selected="true">All services</button>
     {% for category in stock.keys() %}
       <button class="pill" data-svc="{{ category }}" role="tab" aria-selected="false">
-        {% if category == "facebook" %}📘 Facebook{% else %}📸 Instagram{% endif %}
+        {{ "Facebook" if category == "facebook" else "Instagram" }}
       </button>
     {% endfor %}
   </div>
 
-  <div class="grid sms-grid" id="sms-grid">
+  <div class="grid" id="sms-grid">
     {% for category, offers in stock.items() %}
       {% for offer in offers %}
-        <div class="card sms-offer" data-svc="{{ category }}">
-          <div class="sms-offer-top">
+        <div class="card card-interactive sms-card reveal" data-svc="{{ category }}">
+          <div class="sms-top">
             <span class="sms-flag" aria-hidden="true">{{ offer.flag }}</span>
-            <div class="sms-offer-name">
+            <div class="sms-name">
               <h3>{{ offer.country }}</h3>
-              <span class="sms-svc-tag {{ category }}">
-                {% if category == "facebook" %}Facebook{% else %}Instagram{% endif %}
-              </span>
-              {% if offer.cold %}
-                <span class="badge out" style="margin-top:.3rem">⚠ Low delivery</span>
-              {% elif offer.recent_total and offer.recent_total >= 3 %}
-                <span class="badge ok" style="margin-top:.3rem">✅ {{ (offer.success_rate * 100) | round | int }}% delivered</span>
-              {% else %}
-                <span class="badge warn" style="margin-top:.3rem">🆕 New</span>
-              {% endif %}
+              <div class="sms-tags">
+                <span class="svc-tag svc-{{ category }}">
+                  {{ "Facebook" if category == "facebook" else "Instagram" }}
+                </span>
+                {% if offer.cold %}
+                  <span class="badge badge-danger">Low delivery</span>
+                {% elif offer.recent_total and offer.recent_total >= 3 %}
+                  <span class="badge badge-ok">
+                    {{ (offer.success_rate * 100) | round | int }}% delivered
+                  </span>
+                {% else %}
+                  <span class="badge">New</span>
+                {% endif %}
+              </div>
             </div>
           </div>
-          <div class="sms-offer-bottom">
+
+          <div class="sms-bottom">
             <div>
-              <span class="muted" style="font-size:.72rem;display:block">Price</span>
-              <span class="price">${{ "%.2f" | format(offer.price) }}</span>
+              <span class="eyebrow" style="display:block">Price</span>
+              <span class="price price-lg">${{ "%.2f" | format(offer.price) }}</span>
             </div>
             {% if session_user %}
               {% if balance >= offer.price %}
-                <form method="post" action="/web/sms/buy">
+                <form method="post" action="/web/sms/buy" class="sms-buy-form">
                   <input type="hidden" name="category" value="{{ category }}">
                   <input type="hidden" name="country" value="{{ offer.code }}">
                   <button type="submit" class="btn btn-primary btn-sm">Get number</button>
@@ -83,27 +108,67 @@
       {% endfor %}
     {% endfor %}
   </div>
-  <p class="empty-msg" id="sms-empty" hidden>No numbers in this service right now.</p>
 
-  <div class="card sms-how">
-    <h3>How it works</h3>
-    <div class="how-steps">
-      <div class="how-step"><span class="how-num">1</span><p>Top up your wallet with KHQR (any Cambodian bank app).</p></div>
-      <div class="how-step"><span class="how-num">2</span><p>Pick a service & country — the price shown is the price you pay.</p></div>
-      <div class="how-step"><span class="how-num">3</span><p>Use the number on Facebook/Instagram to request the code.</p></div>
-      <div class="how-step"><span class="how-num">4</span><p>The code appears here automatically. No code = instant refund.</p></div>
-    </div>
+  <div class="empty-state" id="sms-empty" hidden>
+    <span class="empty-icon"><svg class="ic" aria-hidden="true"><use href="#i-phone"/></svg></span>
+    <h3>No numbers in this service right now</h3>
+    <p class="muted">Stock changes often — try the other service or check back shortly.</p>
   </div>
 
-  <script>
-    const pills = document.querySelectorAll(".pill");
-    const cards = document.querySelectorAll(".sms-offer");
-    pills.forEach(p => p.addEventListener("click", () => {
-      pills.forEach(x => { x.classList.remove("active"); x.setAttribute("aria-selected","false"); });
-      p.classList.add("active"); p.setAttribute("aria-selected","true");
-      const svc = p.dataset.svc; let shown = 0;
-      cards.forEach(c => { const s = svc === "*" || c.dataset.svc === svc; c.hidden = !s; if (s) shown++; });
-      document.getElementById("sms-empty").hidden = shown > 0;
-    }));
-  </script>
+  <div class="card card-lg" style="margin-top:var(--sp-8)">
+    <h2 style="font-size:var(--fs-md);margin-bottom:var(--sp-5)">How it works</h2>
+    <div class="how-steps">
+      <div class="how-step">
+        <span class="how-num">1</span>
+        <p>Top up your wallet with KHQR from any Cambodian banking app.</p>
+      </div>
+      <div class="how-step">
+        <span class="how-num">2</span>
+        <p>Pick a service and country — the price shown is the price you pay.</p>
+      </div>
+      <div class="how-step">
+        <span class="how-num">3</span>
+        <p>Enter the number on Facebook or Instagram and request the code.</p>
+      </div>
+      <div class="how-step">
+        <span class="how-num">4</span>
+        <p>The code appears here automatically. No code means an instant refund.</p>
+      </div>
+    </div>
+  </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  (function () {
+    var pills = document.querySelectorAll(".filter-bar .pill");
+    var cards = document.querySelectorAll(".sms-card");
+    var empty = document.getElementById("sms-empty");
+
+    pills.forEach(function (pill) {
+      pill.addEventListener("click", function () {
+        pills.forEach(function (p) { p.setAttribute("aria-selected", "false"); });
+        pill.setAttribute("aria-selected", "true");
+
+        var svc = pill.dataset.svc;
+        var shown = 0;
+        cards.forEach(function (card) {
+          var show = svc === "*" || card.dataset.svc === svc;
+          card.hidden = !show;
+          if (show) shown++;
+        });
+        empty.hidden = shown > 0;
+      });
+    });
+
+    /* Renting is charged immediately — block the double submit. */
+    document.querySelectorAll(".sms-buy-form").forEach(function (form) {
+      form.addEventListener("submit", function () {
+        var btn = form.querySelector("button");
+        btn.setAttribute("aria-disabled", "true");
+        btn.innerHTML = '<span class="spinner"></span>';
+      });
+    });
+  })();
+</script>
 {% endblock %}

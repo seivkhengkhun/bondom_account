@@ -1,25 +1,51 @@
-{# Fintech-style refund panel — shown when an SMS order was refunded. #}
+{# Refund receipt — shown when an SMS order was automatically refunded. #}
 <div class="refund-panel">
   <div class="refund-head">
-    <span class="refund-ic"><svg class="ic" aria-hidden="true"><use href="#i-check"/></svg></span>
+    <span class="refund-mark" aria-hidden="true">
+      <svg class="ic" aria-hidden="true"><use href="#i-check"/></svg>
+    </span>
     <div>
-      <h3>Refund completed</h3>
-      <p class="muted">No SMS was delivered, so your payment was returned in full.</p>
+      <h3 style="font-size:var(--fs-md)">Refund completed</h3>
+      <p class="muted text-sm">No SMS was delivered, so your payment was
+        returned in full.</p>
     </div>
   </div>
 
-  {# refund progress: all three done, since our refund is atomic + instant #}
-  <ol class="refund-steps" aria-label="Refund progress">
-    <li class="done"><span class="rf-dot"><svg class="ic sm" aria-hidden="true"><use href="#i-check"/></svg></span>Initiated</li>
-    <li class="done"><span class="rf-dot"><svg class="ic sm" aria-hidden="true"><use href="#i-check"/></svg></span>Processed</li>
-    <li class="done"><span class="rf-dot"><svg class="ic sm" aria-hidden="true"><use href="#i-check"/></svg></span>Completed</li>
+  {# Our refund is atomic and instant, so all three stages are already done. #}
+  <ol class="steps" aria-label="Refund progress" style="margin-bottom:var(--sp-4)">
+    <li class="is-done">
+      <span class="step-dot"><svg class="ic ic-sm" aria-hidden="true"><use href="#i-check"/></svg></span>
+      Initiated
+    </li>
+    <li class="is-done">
+      <span class="step-dot"><svg class="ic ic-sm" aria-hidden="true"><use href="#i-check"/></svg></span>
+      Processed
+    </li>
+    <li class="is-done">
+      <span class="step-dot"><svg class="ic ic-sm" aria-hidden="true"><use href="#i-check"/></svg></span>
+      Credited
+    </li>
   </ol>
 
   <dl class="refund-meta">
-    <div><dt>Amount refunded</dt><dd class="refund-amt">${{ "%.2f" | format(o.price) }}</dd></div>
-    <div><dt>Credited to</dt><dd>Wallet balance</dd></div>
-    <div><dt>Transaction ID</dt><dd><code>{{ txn_ref }}</code></dd></div>
-    {% if resolved_at %}<div><dt>Completed at</dt><dd>{{ resolved_at }} UTC</dd></div>{% endif %}
+    <div>
+      <dt>Amount refunded</dt>
+      <dd style="color:var(--ok);font-size:var(--fs-md)">${{ "%.2f" | format(o.price) }}</dd>
+    </div>
+    <div>
+      <dt>Credited to</dt>
+      <dd>Wallet balance</dd>
+    </div>
+    <div>
+      <dt>Transaction ID</dt>
+      <dd><code>{{ txn_ref }}</code></dd>
+    </div>
+    {% if resolved_at %}
+      <div>
+        <dt>Completed at</dt>
+        <dd>{{ resolved_at }} UTC</dd>
+      </div>
+    {% endif %}
   </dl>
 
   <div class="refund-actions">

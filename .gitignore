@@ -3,6 +3,9 @@
 
 # Databases — production data must never live in git
 *.db
+*.db.*
+*.sqlite
+*.sqlite3
 backups/
 
 # Python

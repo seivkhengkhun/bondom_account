@@ -2,81 +2,121 @@
 {% block title %}{{ o.product.name }} — Bondom Account{% endblock %}
 {% block content %}
   <nav class="breadcrumb" aria-label="Breadcrumb">
-    <a href="/">Catalog</a> <span aria-hidden="true">›</span>
-    <span>{{ o.product.category }}</span> <span aria-hidden="true">›</span>
+    <a href="/">Catalog</a>
+    <span class="sep" aria-hidden="true">/</span>
+    <span>{{ o.product.category }}</span>
+    <span class="sep" aria-hidden="true">/</span>
     <span class="current">{{ o.product.name }}</span>
   </nav>
 
   <div class="product-layout">
-    <section class="card product-info">
+    <section class="card card-lg product-info">
       <span class="chip">{{ o.product.category }}</span>
       <h1>{{ o.product.name }}</h1>
-      <div class="meta">
+
+      <div class="meta-row">
         {% if show_stock %}
           {% if o.available > 0 %}
-            <span class="badge ok">● {{ o.available }} in stock</span>
+            <span class="badge badge-ok"><span class="dot"></span>{{ o.available }} in stock</span>
           {% else %}
-            <span class="badge out">Sold out</span>
+            <span class="badge badge-danger">Sold out</span>
           {% endif %}
         {% endif %}
         {% if o.product.warranty_days %}
-          <span class="badge warranty"><svg class="ic sm" aria-hidden="true"><use href="#i-shield"/></svg> {{ o.product.warranty_days }}-day warranty</span>
+          <span class="badge">
+            <svg class="ic ic-sm" aria-hidden="true"><use href="#i-shield"/></svg>
+            {{ o.product.warranty_days }}-day warranty
+          </span>
         {% endif %}
       </div>
 
       {% if note %}
-        <div class="note">
-          <p class="note-title">📝 Product information</p>
+        <div class="note" style="margin-top:var(--sp-5)">
+          <p class="note-title">
+            <svg class="ic ic-sm" aria-hidden="true"><use href="#i-info"/></svg>
+            Product information
+          </p>
           {{ note }}
         </div>
       {% endif %}
 
-      <ul class="feature-list" role="list">
-        <li><svg class="ic" aria-hidden="true"><use href="#i-bolt"/></svg> Delivered automatically the moment payment confirms</li>
-        <li><svg class="ic" aria-hidden="true"><use href="#i-qr"/></svg> Pay by KHQR — ABA, ACLEDA, Wing, Bakong &amp; more</li>
-        <li><svg class="ic tg" aria-hidden="true"><use href="#i-tg"/></svg> A copy is also sent to your Telegram chat</li>
+      <ul class="feature-list">
+        <li>
+          <svg class="ic" aria-hidden="true"><use href="#i-bolt"/></svg>
+          <span>Delivered automatically the moment your payment confirms.</span>
+        </li>
+        <li>
+          <svg class="ic" aria-hidden="true"><use href="#i-qr"/></svg>
+          <span>Pay by KHQR — ABA, ACLEDA, Wing, Bakong and more.</span>
+        </li>
+        <li>
+          <svg class="ic ic-tg" aria-hidden="true"><use href="#i-tg"/></svg>
+          <span>A copy is sent to your Telegram chat automatically.</span>
+        </li>
+        {% if o.product.warranty_days %}
+          <li>
+            <svg class="ic" aria-hidden="true"><use href="#i-shield"/></svg>
+            <span>Covered by a {{ o.product.warranty_days }}-day replacement warranty.</span>
+          </li>
+        {% endif %}
       </ul>
     </section>
 
-    <aside class="card buy-panel" aria-label="Purchase">
-      <p class="price big">${{ o.product.price }}<span class="per"> / item</span></p>
-      {% if error %}<p class="alert error" role="alert">⚠ {{ error }}</p>{% endif %}
+    <aside class="card card-lg buy-panel" aria-label="Purchase">
+      <p class="price price-xl">${{ o.product.price }}<span class="price-unit"> / item</span></p>
+
+      {% if error %}
+        <p class="alert alert-error" role="alert" style="margin-top:var(--sp-4)">
+          <svg class="ic" aria-hidden="true"><use href="#i-alert"/></svg>
+          <span>{{ error }}</span>
+        </p>
+      {% endif %}
 
       {% if session_user %}
         {% if o.available > 0 %}
-          <form method="post" action="/web/buy" class="buy-form">
+          <form method="post" action="/web/buy" id="buy-form" style="margin-top:var(--sp-5)">
             <input type="hidden" name="product_id" value="{{ o.product.id }}">
-            <label for="qty">Quantity</label>
-            <div class="stepper">
-              <button type="button" data-step="-1" aria-label="Decrease quantity">−</button>
-              <input id="qty" type="number" name="quantity" value="1" min="1"
-                     max="{{ o.available }}" inputmode="numeric">
-              <button type="button" data-step="1" aria-label="Increase quantity">+</button>
+
+            <div class="field">
+              <label class="label" for="qty">Quantity</label>
+              <div class="stepper">
+                <button type="button" data-step="-1" aria-label="Decrease quantity">&minus;</button>
+                <input id="qty" type="number" name="quantity" value="1" min="1"
+                       max="{{ o.available }}" inputmode="numeric"
+                       aria-describedby="qty-hint">
+                <button type="button" data-step="1" aria-label="Increase quantity">+</button>
+              </div>
+              <p class="field-hint" id="qty-hint">{{ o.available }} available</p>
+              <p class="field-error" id="qty-error" hidden>
+                <svg class="ic ic-sm" aria-hidden="true"><use href="#i-alert"/></svg>
+                <span></span>
+              </p>
             </div>
-            <p class="total">Total: <b id="total">${{ o.product.price }}</b></p>
+
+            <div class="total-row">
+              <span>Total</span>
+              <b id="total">${{ o.product.price }}</b>
+            </div>
+
             <button type="submit" class="btn btn-primary btn-lg btn-block">
-              <svg class="ic" aria-hidden="true"><use href="#i-qr"/></svg> Pay with KHQR
+              <svg class="ic" aria-hidden="true"><use href="#i-qr"/></svg>
+              Pay with KHQR
             </button>
+            <p class="field-hint" style="text-align:center;margin-top:var(--sp-3)">
+              You will see a QR code on the next screen.
+            </p>
           </form>
-          <script>
-            const unit = parseFloat("{{ o.product.price }}");
-            const qty = document.getElementById("qty");
-            const maxQty = parseInt(qty.max, 10);
-            function refresh() {
-              let v = Math.min(maxQty, Math.max(1, parseInt(qty.value || "1", 10)));
-              qty.value = v;
-              document.getElementById("total").textContent = "$" + (unit * v).toFixed(2);
-            }
-            document.querySelectorAll(".stepper [data-step]").forEach(b =>
-              b.addEventListener("click", () => { qty.value = (parseInt(qty.value||"1",10) + parseInt(b.dataset.step,10)); refresh(); }));
-            qty.addEventListener("input", refresh);
-          </script>
         {% else %}
-          <p class="alert error">This product is currently out of stock — check back soon.</p>
+          <div class="empty-state" style="padding:var(--sp-6) 0">
+            <span class="empty-icon"><svg class="ic" aria-hidden="true"><use href="#i-package"/></svg></span>
+            <h3>Out of stock</h3>
+            <p class="muted">This product just sold out. Check back soon.</p>
+            <a class="btn btn-outline" href="/">Browse catalog</a>
+          </div>
         {% endif %}
       {% else %}
-        <div class="login-box" id="signin">
-          <p>Sign in with Telegram to buy:</p>
+        <div class="signin-panel" id="signin" style="margin-top:var(--sp-5);box-shadow:none;border:none;padding:0">
+          <p>Sign in with Telegram to buy this product.</p>
           <script async src="https://telegram.org/js/telegram-widget.js?22"
                   data-telegram-login="{{ bot_username }}"
                   data-size="large"
@@ -86,4 +126,56 @@
       {% endif %}
     </aside>
   </div>
+{% endblock %}
+
+{% block scripts %}
+{% if session_user and o.available > 0 %}
+<script>
+  (function () {
+    var unit = parseFloat("{{ o.product.price }}");
+    var max = {{ o.available }};
+    var qty = document.getElementById("qty");
+    var total = document.getElementById("total");
+    var err = document.getElementById("qty-error");
+    var errText = err.querySelector("span");
+
+    function clamp(showError) {
+      var raw = parseInt(qty.value, 10);
+      var v = isNaN(raw) ? 1 : raw;
+      var message = "";
+
+      if (v > max) { v = max; message = "Only " + max + " available."; }
+      else if (v < 1) { v = 1; message = "Minimum quantity is 1."; }
+
+      if (v !== raw) qty.value = v;
+      total.textContent = "$" + (unit * v).toFixed(2);
+
+      var invalid = showError && message !== "";
+      err.hidden = !invalid;
+      qty.setAttribute("aria-invalid", invalid ? "true" : "false");
+      if (invalid) errText.textContent = message;
+
+      document.querySelector('[data-step="-1"]').disabled = v <= 1;
+      document.querySelector('[data-step="1"]').disabled = v >= max;
+    }
+
+    document.querySelectorAll(".stepper [data-step]").forEach(function (b) {
+      b.addEventListener("click", function () {
+        qty.value = (parseInt(qty.value, 10) || 1) + parseInt(b.dataset.step, 10);
+        clamp(false);
+      });
+    });
+    qty.addEventListener("input", function () { clamp(true); });
+    qty.addEventListener("blur", function () { clamp(false); });
+    clamp(false);
+
+    /* Disable on submit so a double-tap can't create two orders. */
+    document.getElementById("buy-form").addEventListener("submit", function (e) {
+      var btn = e.target.querySelector('button[type="submit"]');
+      btn.setAttribute("aria-disabled", "true");
+      btn.innerHTML = '<span class="spinner"></span> Creating order…';
+    });
+  })();
+</script>
+{% endif %}
 {% endblock %}

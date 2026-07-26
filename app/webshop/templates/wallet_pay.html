@@ -1,54 +1,93 @@
 {% extends "base.html" %}
 {% block title %}Top up ${{ amount }} — Bondom Account{% endblock %}
 {% block content %}
-  <div class="pay-layout">
-    <div class="card pay-card">
-      <p class="pay-order muted">Wallet top-up</p>
-      <p class="price big">${{ amount }}</p>
+  <div class="narrow">
+    <nav class="breadcrumb" aria-label="Breadcrumb">
+      <a href="/wallet">Wallet</a>
+      <span class="sep" aria-hidden="true">/</span>
+      <span class="current">Top up ${{ amount }}</span>
+    </nav>
 
-      <div class="qr-wrap">
-        <img class="qr" src="data:image/png;base64,{{ qr_b64 }}" alt="KHQR payment code for ${{ amount }}">
+    <div class="card card-lg" style="text-align:center">
+      <p class="eyebrow">Wallet top-up</p>
+      <p class="price price-xl" style="margin-block:var(--sp-2) var(--sp-5)">${{ amount }}</p>
+
+      <div class="qr-frame">
+        <img src="data:image/png;base64,{{ qr_b64 }}"
+             alt="KHQR payment code for ${{ amount }}" width="272" height="272">
       </div>
 
-      <p class="hint">Open <b>ABA</b>, <b>ACLEDA</b>, <b>Wing</b> or any Cambodian
-        banking app and scan this KHQR.</p>
+      <p class="muted text-sm" style="margin-top:var(--sp-4)">
+        Open <b>ABA</b>, <b>ACLEDA</b>, <b>Wing</b> or any Cambodian banking app
+        and scan this KHQR.
+      </p>
 
-      <div id="status" class="status waiting" role="status" aria-live="polite">
+      <div id="status" class="status status-waiting" role="status" aria-live="polite"
+           style="margin-block:var(--sp-5) var(--sp-3)">
         <span class="spinner" aria-hidden="true"></span>
-        Waiting for payment — updates automatically
+        <span>Waiting for payment — updates automatically</span>
       </div>
-      <p class="hint">QR expires: <span id="expiry"></span></p>
+
+      <div class="progress" aria-hidden="true">
+        <div class="progress-fill" id="expiry-fill"></div>
+      </div>
+      <p class="field-hint" style="margin-top:var(--sp-2)">
+        <svg class="ic ic-sm" aria-hidden="true" style="vertical-align:-0.15em"><use href="#i-clock"/></svg>
+        QR expires in <span id="expiry" style="font-variant-numeric:tabular-nums">—</span>
+      </p>
     </div>
   </div>
+{% endblock %}
 
-  <script>
-    const expiresAt = new Date("{{ expires_at }}");
+{% block scripts %}
+<script>
+  (function () {
+    var expiresAt = new Date("{{ expires_at }}");
+    var startMs = Math.max(1, expiresAt - Date.now());
+    var status = document.getElementById("status");
+    var fill = document.getElementById("expiry-fill");
+    var expiry = document.getElementById("expiry");
+    var expired = false;
+
     function tick() {
-      const left = Math.max(0, Math.floor((expiresAt - Date.now()) / 1000));
-      document.getElementById("expiry").textContent =
-        Math.floor(left / 60) + "m " + (left % 60) + "s";
-      if (left === 0) {
-        const s = document.getElementById("status");
-        s.className = "status expired";
-        s.innerHTML = "⌛ QR expired — <a href='/wallet'>start a new top-up</a>.";
+      var leftMs = Math.max(0, expiresAt - Date.now());
+      var left = Math.floor(leftMs / 1000);
+      expiry.textContent =
+        Math.floor(left / 60) + "m " + String(left % 60).padStart(2, "0") + "s";
+
+      var pct = Math.max(0, Math.min(100, (leftMs / startMs) * 100));
+      fill.style.width = pct + "%";
+      fill.classList.toggle("is-low", pct < 20);
+
+      if (left === 0 && !expired) {
+        expired = true;
+        status.className = "status status-error";
+        status.innerHTML =
+          '<svg class="ic" aria-hidden="true"><use href="#i-clock"/></svg>' +
+          '<span>QR expired — <a href="/wallet">start a new top-up</a>.</span>';
       }
     }
-    tick(); setInterval(tick, 1000);
+    tick();
+    setInterval(tick, 1000);
 
     async function poll() {
       try {
-        const r = await fetch("/web/wallet/status/{{ topup.id }}");
-        const data = await r.json();
+        var r = await fetch("/web/wallet/status/{{ topup.id }}");
+        var data = await r.json();
         if (data.status === "paid") {
-          const s = document.getElementById("status");
-          s.className = "status paid";
-          s.textContent = "✅ Payment received! Balance updated…";
-          setTimeout(() => location.href = "/wallet?success=Top-up+received", 1000);
+          status.className = "status status-ok";
+          status.innerHTML =
+            '<svg class="ic" aria-hidden="true"><use href="#i-check"/></svg>' +
+            '<span>Payment received — updating your balance…</span>';
+          setTimeout(function () {
+            location.href = "/wallet?success=Top-up+received";
+          }, 1000);
           return;
         }
-      } catch (e) {}
+      } catch (e) { /* transient network error — keep polling */ }
       setTimeout(poll, 4000);
     }
     poll();
-  </script>
+  })();
+</script>
 {% endblock %}

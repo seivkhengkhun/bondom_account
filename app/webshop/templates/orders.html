@@ -2,35 +2,57 @@
 {% block title %}My Orders — Bondom Account{% endblock %}
 {% block content %}
   <div class="page-head">
-    <h1>📦 My Orders</h1>
-    <span class="wallet-chip" title="Wallet balance">💰 ${{ balance }}</span>
+    <div>
+      <h1>My Orders</h1>
+      <p class="sub">Every purchase you have made, on the website or in the bot.</p>
+    </div>
+    <div class="balance-card" style="min-width:auto">
+      <span class="eyebrow">Wallet balance</span>
+      <span class="balance-amount" style="font-size:var(--fs-xl)">${{ balance }}</span>
+      <a class="btn btn-outline btn-sm" href="/wallet" style="margin-top:var(--sp-2)">
+        <svg class="ic ic-sm" aria-hidden="true"><use href="#i-plus"/></svg> Top up
+      </a>
+    </div>
   </div>
 
   {% if orders %}
-    <div class="orders-list">
+    <div class="list">
       {% for o in orders %}
-        <a class="card order-row"
+        <a class="card card-interactive list-row reveal"
            href="{% if o.status.value == 'pending' %}/pay/{{ o.id }}{% else %}/order/{{ o.id }}{% endif %}">
-          <div class="or-main">
-            <span class="or-id">#{{ o.id }}</span>
-            <span class="or-date muted">{{ o.created_at.strftime("%Y-%m-%d %H:%M") }}</span>
+          <div class="lr-main">
+            <span class="lr-title">Order #{{ o.id }}</span>
+            <span class="lr-sub">{{ o.created_at.strftime("%d %b %Y, %H:%M") }}</span>
           </div>
-          <span class="or-total">${{ o.total_price }}</span>
-          <span class="badge {% if o.status.value == 'delivered' %}ok{% elif o.status.value == 'pending' %}warn{% elif o.status.value == 'canceled' %}out{% endif %}">
+
+          <span class="lr-amount">${{ o.total_price }}</span>
+
+          <span class="badge {% if o.status.value == 'delivered' %}badge-ok{% elif o.status.value == 'pending' %}badge-warn{% elif o.status.value == 'canceled' %}badge-danger{% endif %}">
+            {% if o.status.value == 'pending' %}
+              <span class="dot dot-live"></span>
+            {% endif %}
             {{ o.status.value }}
           </span>
-          <span class="or-action">
-            {% if o.status.value == "pending" %}Pay now →{% else %}View →{% endif %}
+
+          <span class="lr-action">
+            {% if o.status.value == "pending" %}Pay now{% else %}View{% endif %}
+            <svg class="ic ic-sm" aria-hidden="true"><use href="#i-arrow-right"/></svg>
           </span>
         </a>
       {% endfor %}
     </div>
   {% else %}
-    <div class="card center-card">
-      <p class="empty-emoji" aria-hidden="true">🛒</p>
-      <h2>No orders yet</h2>
-      <p class="muted">Your purchases will appear here — on the website and in the Telegram bot.</p>
-      <a class="btn btn-primary" href="/">Browse the catalog</a>
+    <div class="card card-lg">
+      <div class="empty-state">
+        <span class="empty-icon"><svg class="ic" aria-hidden="true"><use href="#i-package"/></svg></span>
+        <h2 style="font-size:var(--fs-lg)">No orders yet</h2>
+        <p class="muted">Your purchases will appear here — from both the website
+          and the Telegram bot.</p>
+        <a class="btn btn-primary" href="/">
+          Browse the catalog
+          <svg class="ic ic-sm" aria-hidden="true"><use href="#i-arrow-right"/></svg>
+        </a>
+      </div>
     </div>
   {% endif %}
 {% endblock %}

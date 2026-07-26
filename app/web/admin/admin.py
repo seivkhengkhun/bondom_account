@@ -15,8 +15,10 @@ rules live in the UI.
 Run from ``app/web`` with:  reflex run
 """
 
+import asyncio
 import dataclasses
 import sys
+import time
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
@@ -27,10 +29,16 @@ if str(PROJECT_ROOT) not in sys.path:
 import reflex as rx
 from aiogram import Bot
 
-from shared import services
+from shared import admin_auth, services
 from shared.config import settings
 from shared.database import AsyncSessionLocal
 from shared.schemas import ProductCreate
+
+# Sign the admin out after this long without interaction. Kept short
+# because the panel can move money (balance adjustments, refunds).
+SESSION_IDLE_SECONDS = 15 * 60
+# How often the background watchdog re-checks idle time.
+SESSION_TICK_SECONDS = 30
 
 
 # --------------------------------------------------------------------------- #
@@ -90,6 +98,34 @@ class AdminState(rx.State):
     authed: bool = False
     password_input: str = ""
     login_message: str = ""
+
+    # Session lifetime
+    last_activity: float = 0.0
+    session_notice: str = ""
+    # True while the .env bootstrap password is still in use, so the UI
+    # can nudge the admin to set a real one.
+    using_env_password: bool = False
+
+    # Change-password form
+    current_password: str = ""
+    new_password: str = ""
+    confirm_password: str = ""
+    password_message: str = ""
+    password_ok: bool = False
+    password_score: int = 0
+    password_strength_label: str = ""
+
+    # Table sorting — column key + direction per table
+    product_sort: str = "id"
+    product_desc: bool = False
+    order_sort: str = "id"
+    order_desc: bool = True
+    user_sort: str = "id"
+    user_desc: bool = False
+
+    # Filters
+    order_status_filter: str = "all"
+    user_status_filter: str = "all"
 
     # KPIs
     stat_users: int = 0
@@ -160,42 +196,201 @@ class AdminState(rx.State):
             or q == str(r.id)
         ]
 
+    # Sorting helpers -------------------------------------------------
+    # Numeric columns are stored as strings (state must serialise), so
+    # they are coerced back to floats for comparison — otherwise "10"
+    # sorts before "9".
+    @staticmethod
+    def _num(value: str) -> float:
+        try:
+            return float(str(value).replace("$", "").replace(",", "").strip())
+        except (TypeError, ValueError):
+            return 0.0
+
+    def sort_products(self, column: str) -> None:
+        self.product_desc = (
+            not self.product_desc if self.product_sort == column else False
+        )
+        self.product_sort = column
+
+    def sort_orders(self, column: str) -> None:
+        self.order_desc = (
+            not self.order_desc if self.order_sort == column else False
+        )
+        self.order_sort = column
+
+    def sort_users(self, column: str) -> None:
+        self.user_desc = (
+            not self.user_desc if self.user_sort == column else False
+        )
+        self.user_sort = column
+
+    def set_order_status_filter(self, v: str) -> None:
+        self.order_status_filter = v
+
+    def set_user_status_filter(self, v: str) -> None:
+        self.user_status_filter = v
+
     @rx.var
     def filtered_products(self) -> list[ProductRow]:
         q = self.product_search.strip().lower()
-        if not q:
-            return self.products
-        return [
-            p
-            for p in self.products
-            if q in p.name.lower()
-            or q in p.category.lower()
-            or q == str(p.id)
-        ]
+        rows = self.products
+        if q:
+            rows = [
+                p
+                for p in rows
+                if q in p.name.lower()
+                or q in p.category.lower()
+                or q == str(p.id)
+            ]
+
+        keys = {
+            "id": lambda p: p.id,
+            "name": lambda p: p.name.lower(),
+            "category": lambda p: p.category.lower(),
+            "price": lambda p: self._num(p.price),
+            "available": lambda p: p.available,
+            "sold": lambda p: p.sold,
+            "revenue": lambda p: self._num(p.revenue),
+        }
+        key = keys.get(self.product_sort, keys["id"])
+        return sorted(rows, key=key, reverse=self.product_desc)
 
     @rx.var
     def filtered_orders(self) -> list[OrderRow]:
         q = self.order_search.strip().lower()
-        if not q:
-            return self.orders
-        return [
-            o
-            for o in self.orders
-            if q in o.buyer.lower() or q in o.status.lower() or q == str(o.id)
-        ]
+        rows = self.orders
+
+        if self.order_status_filter != "all":
+            rows = [
+                o
+                for o in rows
+                if o.status.lower() == self.order_status_filter
+            ]
+        if q:
+            rows = [
+                o
+                for o in rows
+                if q in o.buyer.lower()
+                or q in o.status.lower()
+                or q == str(o.id)
+            ]
+
+        keys = {
+            "id": lambda o: o.id,
+            "buyer": lambda o: o.buyer.lower(),
+            "total": lambda o: self._num(o.total_price),
+            "status": lambda o: o.status.lower(),
+            "created": lambda o: o.created_at,
+        }
+        key = keys.get(self.order_sort, keys["id"])
+        return sorted(rows, key=key, reverse=self.order_desc)
+
+    @rx.var
+    def order_status_options(self) -> list[str]:
+        return ["all"] + sorted({o.status.lower() for o in self.orders})
 
     @rx.var
     def filtered_users(self) -> list[UserRow]:
         q = self.user_search.strip().lower()
-        if not q:
-            return self.users
-        return [
-            u
-            for u in self.users
-            if q in u.username.lower()
-            or q in u.telegram_id
-            or q == str(u.id)
+        rows = self.users
+
+        if self.user_status_filter == "active":
+            rows = [u for u in rows if u.is_active and not u.is_blocked]
+        elif self.user_status_filter == "suspended":
+            rows = [u for u in rows if not u.is_active]
+        elif self.user_status_filter == "blocked":
+            rows = [u for u in rows if u.is_blocked]
+
+        if q:
+            rows = [
+                u
+                for u in rows
+                if q in u.username.lower()
+                or q in u.telegram_id
+                or q == str(u.id)
+            ]
+
+        keys = {
+            "id": lambda u: u.id,
+            "username": lambda u: u.username.lower(),
+            "telegram": lambda u: u.telegram_id,
+            "balance": lambda u: self._num(u.balance),
+        }
+        key = keys.get(self.user_sort, keys["id"])
+        return sorted(rows, key=key, reverse=self.user_desc)
+
+    # ----------------------------------------------------------------- #
+    # Analytics — derived from rows already in state, so charts cost no
+    # extra queries and stay consistent with the tables below them.
+    # ----------------------------------------------------------------- #
+    @rx.var
+    def revenue_by_product(self) -> list[dict]:
+        """Top products by revenue, for the dashboard bar chart."""
+        rows = [
+            {"name": p.name[:18], "revenue": round(self._num(p.revenue), 2)}
+            for p in self.products
+            if self._num(p.revenue) > 0
         ]
+        rows.sort(key=lambda r: r["revenue"], reverse=True)
+        return rows[:7]
+
+    @rx.var
+    def orders_by_status(self) -> list[dict]:
+        counts: dict[str, int] = {}
+        for o in self.orders:
+            counts[o.status.lower()] = counts.get(o.status.lower(), 0) + 1
+        palette = {
+            "delivered": "#10b981",
+            "paid": "#6366f1",
+            "pending": "#f59e0b",
+            "canceled": "#ef4444",
+        }
+        return [
+            {"name": k, "value": v, "fill": palette.get(k, "#94a3b8")}
+            for k, v in sorted(counts.items(), key=lambda kv: -kv[1])
+        ]
+
+    @rx.var
+    def orders_by_day(self) -> list[dict]:
+        """Order volume per calendar day, oldest first (last 14 days)."""
+        counts: dict[str, int] = {}
+        for o in self.orders:
+            day = (o.created_at or "")[:10]
+            if day:
+                counts[day] = counts.get(day, 0) + 1
+        days = sorted(counts)[-14:]
+        return [{"day": d[5:], "orders": counts[d]} for d in days]
+
+    @rx.var
+    def stock_alerts(self) -> list[ProductRow]:
+        """Active products that are out of, or nearly out of, stock."""
+        return [
+            p
+            for p in self.products
+            if p.is_active and p.available <= 3
+        ]
+
+    @rx.var
+    def stock_alert_count(self) -> int:
+        return len(self.stock_alerts)
+
+    # Result counters, so tables can show "showing X of Y".
+    @rx.var
+    def product_result_count(self) -> int:
+        return len(self.filtered_products)
+
+    @rx.var
+    def order_result_count(self) -> int:
+        return len(self.filtered_orders)
+
+    @rx.var
+    def user_result_count(self) -> int:
+        return len(self.filtered_users)
+
+    @rx.var
+    def sms_result_count(self) -> int:
+        return len(self.filtered_sms)
 
     # Add-product form
     new_name: str = ""
@@ -221,22 +416,135 @@ class AdminState(rx.State):
     def set_password_input(self, v: str) -> None:
         self.password_input = v
 
-    async def login(self) -> None:
-        if not settings.admin_password:
+    def touch(self) -> None:
+        """Record interaction so the idle watchdog holds off."""
+        self.last_activity = time.time()
+
+    @rx.var
+    def idle_seconds_left(self) -> int:
+        if not self.authed:
+            return 0
+        left = SESSION_IDLE_SECONDS - (time.time() - self.last_activity)
+        return max(0, int(left))
+
+    async def login(self):
+        password = self.password_input
+        self.password_input = ""
+
+        if not password:
+            self.login_message = "Enter your password."
+            return
+
+        async with AsyncSessionLocal() as session:
+            ok = await admin_auth.verify_admin_password(session, password)
+            bootstrap = not await admin_auth.has_stored_password(session)
+
+        if not ok:
+            # Deliberately vague, and slow enough to blunt brute force
+            # against a panel that is exposed to the internet.
+            await asyncio.sleep(0.6)
+            self.login_message = "Incorrect password."
+            return
+
+        if bootstrap and not settings.admin_password:
             self.login_message = (
                 "ADMIN_PASSWORD is not set in .env on the server."
             )
             return
-        if self.password_input == settings.admin_password:
-            self.authed = True
-            self.login_message = ""
-            self.password_input = ""
-            await self.load_all()
-        else:
-            self.login_message = "Wrong password."
 
-    def logout(self) -> None:
+        self.authed = True
+        self.login_message = ""
+        self.session_notice = ""
+        self.using_env_password = bootstrap
+        self.touch()
+        await self.load_all()
+        return AdminState.session_watchdog
+
+    def logout(self, notice: str = "") -> None:
+        """Drop the session and wipe anything sensitive held in state."""
         self.authed = False
+        self.session_notice = notice
+        self.password_input = ""
+        self.current_password = ""
+        self.new_password = ""
+        self.confirm_password = ""
+        self.password_message = ""
+        self.password_ok = False
+
+    @rx.event(background=True)
+    async def session_watchdog(self):
+        """Sign the admin out after a period with no interaction.
+
+        Runs server-side, so closing the laptop lid or leaving the tab
+        open does not keep the session alive.
+        """
+        while True:
+            await asyncio.sleep(SESSION_TICK_SECONDS)
+            async with self:
+                if not self.authed:
+                    return
+                idle = time.time() - self.last_activity
+                if idle >= SESSION_IDLE_SECONDS:
+                    self.logout(
+                        "Signed out automatically after "
+                        f"{SESSION_IDLE_SECONDS // 60} minutes of inactivity."
+                    )
+                    return
+
+    # ------------------------------------------------------------- #
+    # Change password
+    # ------------------------------------------------------------- #
+    def set_current_password(self, v: str) -> None:
+        self.current_password = v
+
+    def set_new_password(self, v: str) -> None:
+        self.new_password = v
+        score, label = admin_auth.password_strength(v)
+        self.password_score = score
+        self.password_strength_label = label
+
+    def set_confirm_password(self, v: str) -> None:
+        self.confirm_password = v
+
+    async def change_password(self):
+        if not self.authed:
+            return
+        self.touch()
+
+        check = admin_auth.validate_new_password(
+            self.new_password, self.confirm_password
+        )
+        if not check.ok:
+            self.password_ok = False
+            self.password_message = check.message
+            return
+
+        if self.new_password == self.current_password:
+            self.password_ok = False
+            self.password_message = "The new password matches the old one."
+            return
+
+        async with AsyncSessionLocal() as session:
+            if not await admin_auth.verify_admin_password(
+                session, self.current_password
+            ):
+                await asyncio.sleep(0.6)
+                self.password_ok = False
+                self.password_message = "Current password is incorrect."
+                return
+            await admin_auth.set_admin_password(session, self.new_password)
+
+        self.current_password = ""
+        self.new_password = ""
+        self.confirm_password = ""
+        self.password_score = 0
+        self.password_strength_label = ""
+        self.using_env_password = False
+        self.password_ok = True
+        self.password_message = (
+            "Password updated. The previous password no longer works."
+        )
+        return rx.toast.success("Admin password changed")
 
     # ----------------------------------------------------------------- #
     # Loading
@@ -895,9 +1203,118 @@ def search_box(placeholder: str, value, on_change) -> rx.Component:
         placeholder=placeholder,
         value=value,
         on_change=on_change,
-        width="16em",
+        width=rx.breakpoints(initial="100%", sm="16em"),
         size="2",
         variant="surface",
+    )
+
+
+def confirm_action(
+    trigger_label: str,
+    icon_name: str,
+    title: str,
+    description,
+    confirm_label: str,
+    on_confirm,
+    color: str = "red",
+) -> rx.Component:
+    """Destructive action behind an explicit confirmation dialog.
+
+    Anything that destroys data or money (clearing stock, permanent
+    blocks) goes through this rather than firing straight off a click.
+    """
+    return rx.alert_dialog.root(
+        rx.alert_dialog.trigger(
+            rx.button(
+                rx.icon(icon_name, size=14),
+                trigger_label,
+                size="1",
+                color_scheme=color,
+                variant="soft",
+            )
+        ),
+        rx.alert_dialog.content(
+            rx.alert_dialog.title(title),
+            rx.alert_dialog.description(description, size="2"),
+            rx.hstack(
+                rx.alert_dialog.cancel(
+                    rx.button("Cancel", variant="soft", color_scheme="gray")
+                ),
+                rx.alert_dialog.action(
+                    rx.button(
+                        confirm_label, color_scheme=color, on_click=on_confirm
+                    )
+                ),
+                spacing="3",
+                justify="end",
+                margin_top="1.2em",
+            ),
+            max_width="26em",
+        ),
+    )
+
+
+def sortable_header(label: str, column: str, current, descending, on_sort):
+    """Table header cell that toggles sort direction when clicked."""
+    return rx.table.column_header_cell(
+        rx.hstack(
+            rx.text(label, size="1", weight="bold"),
+            rx.cond(
+                current == column,
+                rx.icon(
+                    rx.cond(descending, "arrow-down", "arrow-up"),
+                    size=13,
+                    color=rx.color("accent", 9),
+                ),
+                rx.icon("chevrons-up-down", size=13, opacity=0.35),
+            ),
+            spacing="1",
+            align="center",
+        ),
+        on_click=on_sort(column),
+        cursor="pointer",
+        _hover={"background_color": rx.color("gray", 3)},
+        white_space="nowrap",
+    )
+
+
+def result_count(shown, total_label: str) -> rx.Component:
+    return rx.text(
+        f"{shown} {total_label}",
+        size="1",
+        color_scheme="gray",
+        white_space="nowrap",
+    )
+
+
+def chart_card(title: str, subtitle: str, body: rx.Component) -> rx.Component:
+    return rx.card(
+        rx.vstack(
+            rx.vstack(
+                rx.heading(title, size="3"),
+                rx.text(subtitle, size="1", color_scheme="gray"),
+                spacing="0",
+                align="start",
+            ),
+            body,
+            spacing="3",
+            width="100%",
+        ),
+        size="2",
+        width="100%",
+    )
+
+
+def empty_chart(message: str) -> rx.Component:
+    return rx.center(
+        rx.vstack(
+            rx.icon("chart-no-axes-column", size=22, opacity=0.4),
+            rx.text(message, size="1", color_scheme="gray"),
+            spacing="2",
+            align="center",
+        ),
+        height="12em",
+        width="100%",
     )
 
 
@@ -1060,13 +1477,18 @@ def _product_row(p: ProductRow) -> rx.Component:
             )
         ),
         rx.table.cell(
-            rx.button(
-                rx.icon("eraser", size=14),
+            confirm_action(
                 "Clear stock",
-                size="1",
-                color_scheme="red",
-                variant="soft",
-                on_click=lambda: AdminState.clear_stock(p.id),
+                "eraser",
+                "Clear unsold stock?",
+                rx.fragment(
+                    "This permanently deletes every unsold inventory item for ",
+                    rx.text.strong(p.name),
+                    f" ({p.available} available). Items already sold are kept. "
+                    "This cannot be undone.",
+                ),
+                "Delete unsold stock",
+                lambda: AdminState.clear_stock(p.id),
             )
         ),
         align="center",
@@ -1096,13 +1518,24 @@ def products_table_card() -> rx.Component:
                 rx.table.root(
                     rx.table.header(
                         rx.table.row(
-                            rx.table.column_header_cell("ID"),
-                            rx.table.column_header_cell("Name"),
-                            rx.table.column_header_cell("Price"),
-                            rx.table.column_header_cell("Category"),
-                            rx.table.column_header_cell("Available"),
-                            rx.table.column_header_cell("Sold"),
-                            rx.table.column_header_cell("Revenue"),
+                            *[
+                                sortable_header(
+                                    label,
+                                    col,
+                                    AdminState.product_sort,
+                                    AdminState.product_desc,
+                                    AdminState.sort_products,
+                                )
+                                for label, col in [
+                                    ("ID", "id"),
+                                    ("Name", "name"),
+                                    ("Price", "price"),
+                                    ("Category", "category"),
+                                    ("Available", "available"),
+                                    ("Sold", "sold"),
+                                    ("Revenue", "revenue"),
+                                ]
+                            ],
                             rx.table.column_header_cell("Active"),
                             rx.table.column_header_cell(""),
                         )
@@ -1419,11 +1852,22 @@ def orders_tab() -> rx.Component:
                 rx.table.root(
                     rx.table.header(
                         rx.table.row(
-                            rx.table.column_header_cell("ID"),
-                            rx.table.column_header_cell("Buyer"),
-                            rx.table.column_header_cell("Total"),
-                            rx.table.column_header_cell("Status"),
-                            rx.table.column_header_cell("Created"),
+                            *[
+                                sortable_header(
+                                    label,
+                                    col,
+                                    AdminState.order_sort,
+                                    AdminState.order_desc,
+                                    AdminState.sort_orders,
+                                )
+                                for label, col in [
+                                    ("ID", "id"),
+                                    ("Buyer", "buyer"),
+                                    ("Total", "total"),
+                                    ("Status", "status"),
+                                    ("Created", "created"),
+                                ]
+                            ],
                         )
                     ),
                     rx.table.body(
@@ -1476,12 +1920,17 @@ def _user_row(u: UserRow) -> rx.Component:
                     color_scheme="green",
                     on_click=lambda: AdminState.unblock_user(u.id),
                 ),
-                rx.button(
+                confirm_action(
                     "Block Forever",
-                    size="1",
-                    color_scheme="red",
-                    variant="soft",
-                    on_click=lambda: AdminState.block_user_forever(u.id),
+                    "ban",
+                    "Block this user permanently?",
+                    rx.fragment(
+                        rx.text.strong(u.username),
+                        " will be blocked from buying anywhere — bot and "
+                        "website. You can unblock them again later.",
+                    ),
+                    "Block user",
+                    lambda: AdminState.block_user_forever(u.id),
                 ),
             )
         ),
@@ -1545,10 +1994,21 @@ def users_tab() -> rx.Component:
                 rx.table.root(
                     rx.table.header(
                         rx.table.row(
-                            rx.table.column_header_cell("ID"),
-                            rx.table.column_header_cell("Telegram ID"),
-                            rx.table.column_header_cell("Username"),
-                            rx.table.column_header_cell("Wallet"),
+                            *[
+                                sortable_header(
+                                    label,
+                                    col,
+                                    AdminState.user_sort,
+                                    AdminState.user_desc,
+                                    AdminState.sort_users,
+                                )
+                                for label, col in [
+                                    ("ID", "id"),
+                                    ("Telegram ID", "telegram"),
+                                    ("Username", "username"),
+                                    ("Wallet", "balance"),
+                                ]
+                            ],
                             rx.table.column_header_cell("Status"),
                             rx.table.column_header_cell("Active"),
                             rx.table.column_header_cell("Block"),
@@ -1781,6 +2241,302 @@ def sms_tab() -> rx.Component:
 
 
 # --------------------------------------------------------------------------- #
+# Overview tab — charts and at-a-glance health
+# --------------------------------------------------------------------------- #
+def overview_tab() -> rx.Component:
+    return rx.vstack(
+        rx.grid(
+            chart_card(
+                "Revenue by product",
+                "Top earners, all time",
+                rx.cond(
+                    AdminState.revenue_by_product.length() > 0,
+                    rx.recharts.bar_chart(
+                        rx.recharts.bar(
+                            data_key="revenue",
+                            fill=rx.color("accent", 9),
+                            radius=[4, 4, 0, 0],
+                        ),
+                        rx.recharts.x_axis(
+                            data_key="name", tick_size=8, font_size="10px"
+                        ),
+                        rx.recharts.y_axis(font_size="10px"),
+                        rx.recharts.graphing_tooltip(),
+                        rx.recharts.cartesian_grid(
+                            stroke_dasharray="3 3", vertical=False
+                        ),
+                        data=AdminState.revenue_by_product,
+                        height=240,
+                        width="100%",
+                    ),
+                    empty_chart("No revenue recorded yet"),
+                ),
+            ),
+            chart_card(
+                "Orders by status",
+                "Distribution across all orders",
+                rx.cond(
+                    AdminState.orders_by_status.length() > 0,
+                    rx.recharts.pie_chart(
+                        rx.recharts.pie(
+                            data=AdminState.orders_by_status,
+                            data_key="value",
+                            name_key="name",
+                            inner_radius="55%",
+                            outer_radius="80%",
+                            padding_angle=2,
+                        ),
+                        rx.recharts.graphing_tooltip(),
+                        rx.recharts.legend(font_size="11px"),
+                        height=240,
+                        width="100%",
+                    ),
+                    empty_chart("No orders yet"),
+                ),
+            ),
+            columns=rx.breakpoints(initial="1", lg="2"),
+            spacing="3",
+            width="100%",
+        ),
+        chart_card(
+            "Order volume",
+            "Orders per day, last 14 days with activity",
+            rx.cond(
+                AdminState.orders_by_day.length() > 0,
+                rx.recharts.area_chart(
+                    rx.recharts.area(
+                        data_key="orders",
+                        stroke=rx.color("accent", 9),
+                        fill=rx.color("accent", 5),
+                        type_="monotone",
+                    ),
+                    rx.recharts.x_axis(data_key="day", font_size="10px"),
+                    rx.recharts.y_axis(allow_decimals=False, font_size="10px"),
+                    rx.recharts.graphing_tooltip(),
+                    rx.recharts.cartesian_grid(
+                        stroke_dasharray="3 3", vertical=False
+                    ),
+                    data=AdminState.orders_by_day,
+                    height=220,
+                    width="100%",
+                ),
+                empty_chart("No orders yet"),
+            ),
+        ),
+        rx.card(
+            rx.vstack(
+                rx.hstack(
+                    rx.icon(
+                        "triangle-alert", size=17, color=rx.color("amber", 9)
+                    ),
+                    rx.heading("Low stock", size="3"),
+                    rx.badge(
+                        AdminState.stock_alert_count,
+                        color_scheme=rx.cond(
+                            AdminState.stock_alert_count > 0, "amber", "gray"
+                        ),
+                    ),
+                    spacing="2",
+                    align="center",
+                ),
+                rx.cond(
+                    AdminState.stock_alert_count > 0,
+                    rx.vstack(
+                        rx.foreach(
+                            AdminState.stock_alerts,
+                            lambda p: rx.hstack(
+                                rx.text(p.name, size="2"),
+                                rx.spacer(),
+                                rx.badge(
+                                    f"{p.available} left",
+                                    color_scheme=rx.cond(
+                                        p.available == 0, "red", "amber"
+                                    ),
+                                ),
+                                width="100%",
+                                align="center",
+                            ),
+                        ),
+                        spacing="2",
+                        width="100%",
+                    ),
+                    rx.text(
+                        "Every active product has healthy stock.",
+                        size="1",
+                        color_scheme="gray",
+                    ),
+                ),
+                spacing="3",
+                width="100%",
+            ),
+            size="2",
+            width="100%",
+        ),
+        spacing="3",
+        width="100%",
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Settings tab — account security
+# --------------------------------------------------------------------------- #
+def _strength_meter() -> rx.Component:
+    return rx.cond(
+        AdminState.new_password != "",
+        rx.vstack(
+            rx.progress(
+                value=AdminState.password_score * 25,
+                color_scheme=rx.cond(
+                    AdminState.password_score >= 4,
+                    "green",
+                    rx.cond(AdminState.password_score >= 2, "amber", "red"),
+                ),
+                size="1",
+                width="100%",
+            ),
+            rx.text(
+                AdminState.password_strength_label,
+                size="1",
+                color_scheme="gray",
+            ),
+            spacing="1",
+            width="100%",
+        ),
+    )
+
+
+def settings_tab() -> rx.Component:
+    return rx.vstack(
+        rx.cond(
+            AdminState.using_env_password,
+            rx.callout(
+                "You are signed in with the ADMIN_PASSWORD from .env. Set a "
+                "password here — it is stored hashed in the database and the "
+                ".env value stops working.",
+                icon="triangle-alert",
+                color_scheme="amber",
+                size="1",
+                width="100%",
+            ),
+        ),
+        rx.card(
+            rx.vstack(
+                card_header(
+                    "key-round",
+                    "Change admin password",
+                    "Stored as a salted PBKDF2-SHA256 hash. Changing it "
+                    "immediately revokes the old password.",
+                ),
+                rx.vstack(
+                    rx.text("Current password", size="1", weight="medium"),
+                    rx.input(
+                        type="password",
+                        placeholder="Current password",
+                        value=AdminState.current_password,
+                        on_change=AdminState.set_current_password,
+                        width="100%",
+                        size="2",
+                    ),
+                    spacing="1",
+                    width="100%",
+                ),
+                rx.vstack(
+                    rx.text("New password", size="1", weight="medium"),
+                    rx.input(
+                        type="password",
+                        placeholder=(
+                            f"At least {admin_auth.MIN_PASSWORD_LENGTH} "
+                            "characters"
+                        ),
+                        value=AdminState.new_password,
+                        on_change=AdminState.set_new_password,
+                        width="100%",
+                        size="2",
+                    ),
+                    _strength_meter(),
+                    spacing="1",
+                    width="100%",
+                ),
+                rx.vstack(
+                    rx.text("Confirm new password", size="1", weight="medium"),
+                    rx.input(
+                        type="password",
+                        placeholder="Repeat the new password",
+                        value=AdminState.confirm_password,
+                        on_change=AdminState.set_confirm_password,
+                        width="100%",
+                        size="2",
+                    ),
+                    spacing="1",
+                    width="100%",
+                ),
+                rx.button(
+                    rx.icon("shield-check", size=16),
+                    "Update password",
+                    on_click=AdminState.change_password,
+                    size="2",
+                ),
+                rx.cond(
+                    AdminState.password_message != "",
+                    rx.callout(
+                        AdminState.password_message,
+                        icon=rx.cond(
+                            AdminState.password_ok,
+                            "circle-check",
+                            "triangle-alert",
+                        ),
+                        color_scheme=rx.cond(
+                            AdminState.password_ok, "green", "red"
+                        ),
+                        size="1",
+                        width="100%",
+                    ),
+                ),
+                spacing="3",
+                width="100%",
+            ),
+            size="3",
+            width="100%",
+            max_width="34em",
+        ),
+        rx.card(
+            rx.vstack(
+                card_header(
+                    "clock",
+                    "Session",
+                    "Automatic sign-out protects the panel on a shared or "
+                    "unattended machine.",
+                ),
+                rx.hstack(
+                    rx.text("Idle timeout", size="2"),
+                    rx.spacer(),
+                    rx.badge(
+                        f"{SESSION_IDLE_SECONDS // 60} minutes",
+                        color_scheme="gray",
+                    ),
+                    width="100%",
+                ),
+                rx.hstack(
+                    rx.text("Signs out in", size="2"),
+                    rx.spacer(),
+                    rx.badge(
+                        f"{AdminState.idle_seconds_left}s", color_scheme="blue"
+                    ),
+                    width="100%",
+                ),
+                spacing="3",
+                width="100%",
+            ),
+            size="3",
+            width="100%",
+            max_width="34em",
+        ),
+        spacing="3",
+        width="100%",
+    )
+
+
+# --------------------------------------------------------------------------- #
 # Page shell
 # --------------------------------------------------------------------------- #
 def _tab_trigger(icon_name: str, label: str, value: str) -> rx.Component:
@@ -1799,23 +2555,59 @@ def topbar() -> rx.Component:
     return rx.box(
         rx.hstack(
             rx.hstack(
-                rx.icon("store", size=22, color=rx.color("accent", 9)),
-                rx.heading("Bondom Admin", size="5"),
-                spacing="2",
+                rx.box(
+                    rx.icon("store", size=18, color="white"),
+                    background=(
+                        f"linear-gradient(135deg, {rx.color('accent', 9)}, "
+                        f"{rx.color('accent', 11)})"
+                    ),
+                    border_radius="9px",
+                    padding="0.4em",
+                    display="flex",
+                ),
+                rx.vstack(
+                    rx.heading("Bondom Admin", size="4", line_height="1.1"),
+                    rx.text(
+                        "Control panel",
+                        size="1",
+                        color_scheme="gray",
+                        display=rx.breakpoints(initial="none", sm="block"),
+                    ),
+                    spacing="0",
+                    align="start",
+                ),
+                spacing="3",
                 align="center",
             ),
             rx.spacer(),
+            rx.tooltip(
+                rx.badge(
+                    rx.icon("clock", size=12),
+                    f"{AdminState.idle_seconds_left}s",
+                    color_scheme=rx.cond(
+                        AdminState.idle_seconds_left < 120, "amber", "gray"
+                    ),
+                    variant="soft",
+                ),
+                content="Time left before automatic sign-out",
+            ),
             rx.button(
                 rx.icon("refresh-cw", size=15),
-                rx.text("Refresh", display=rx.breakpoints(initial="none", sm="block")),
-                on_click=AdminState.load_all,
+                rx.text(
+                    "Refresh",
+                    display=rx.breakpoints(initial="none", sm="block"),
+                ),
+                on_click=[AdminState.touch, AdminState.load_all],
                 variant="soft",
                 size="2",
             ),
             rx.button(
                 rx.icon("log-out", size=15),
-                rx.text("Sign out", display=rx.breakpoints(initial="none", sm="block")),
-                on_click=AdminState.logout,
+                rx.text(
+                    "Sign out",
+                    display=rx.breakpoints(initial="none", sm="block"),
+                ),
+                on_click=lambda: AdminState.logout(""),
                 variant="soft",
                 color_scheme="gray",
                 size="2",
@@ -1826,8 +2618,8 @@ def topbar() -> rx.Component:
         ),
         position="sticky",
         top="0",
-        z_index="10",
-        backdrop_filter="blur(10px)",
+        z_index="20",
+        backdrop_filter="blur(12px) saturate(180%)",
         background_color=rx.color("gray", 2),
         border_bottom=f"1px solid {rx.color('gray', 5)}",
         padding="0.7em 1.2em",
@@ -1842,13 +2634,23 @@ def dashboard_view() -> rx.Component:
             rx.vstack(
                 kpi_row(),
                 rx.tabs.root(
-                    rx.tabs.list(
-                        _tab_trigger("boxes", "Products", "products"),
-                        _tab_trigger("shopping-cart", "Orders", "orders"),
-                        _tab_trigger("users", "Users", "users"),
-                        _tab_trigger("smartphone", "SMS", "sms"),
-                        _tab_trigger("megaphone", "Marketing", "marketing"),
-                        size="2",
+                    rx.box(
+                        rx.tabs.list(
+                            _tab_trigger("layout-dashboard", "Overview", "overview"),
+                            _tab_trigger("boxes", "Products", "products"),
+                            _tab_trigger("shopping-cart", "Orders", "orders"),
+                            _tab_trigger("users", "Users", "users"),
+                            _tab_trigger("smartphone", "SMS", "sms"),
+                            _tab_trigger("megaphone", "Marketing", "marketing"),
+                            _tab_trigger("settings", "Settings", "settings"),
+                            size="2",
+                        ),
+                        # Tab strip scrolls rather than wrapping on phones.
+                        overflow_x="auto",
+                        width="100%",
+                    ),
+                    rx.tabs.content(
+                        overview_tab(), value="overview", padding_top="1.2em"
                     ),
                     rx.tabs.content(
                         products_tab(), value="products", padding_top="1.2em"
@@ -1865,17 +2667,25 @@ def dashboard_view() -> rx.Component:
                     rx.tabs.content(
                         marketing_tab(), value="marketing", padding_top="1.2em"
                     ),
-                    default_value="products",
+                    rx.tabs.content(
+                        settings_tab(), value="settings", padding_top="1.2em"
+                    ),
+                    default_value="overview",
                     width="100%",
                 ),
                 spacing="4",
                 width="100%",
-                padding="1.2em",
-                max_width="72rem",
+                padding=rx.breakpoints(initial="0.8em", sm="1.2em"),
+                max_width="78rem",
                 margin_x="auto",
             ),
             width="100%",
         ),
+        # Any interaction anywhere in the panel resets the idle timer.
+        # VStack exposes pointer/scroll triggers but not key events, so
+        # mutating handlers also call touch() directly.
+        on_mouse_down=AdminState.touch,
+        on_scroll=AdminState.touch,
         spacing="0",
         width="100%",
     )
@@ -1886,27 +2696,54 @@ def login_view() -> rx.Component:
         rx.card(
             rx.vstack(
                 rx.box(
-                    rx.icon("store", size=26, color=rx.color("accent", 9)),
-                    background_color=rx.color("accent", 3),
-                    border_radius="12px",
-                    padding="0.6em",
+                    rx.icon("store", size=24, color="white"),
+                    background=(
+                        f"linear-gradient(135deg, {rx.color('accent', 9)}, "
+                        f"{rx.color('accent', 11)})"
+                    ),
+                    border_radius="14px",
+                    padding="0.7em",
+                    display="flex",
                 ),
-                rx.heading("Bondom Account", size="6"),
-                rx.text("Admin sign in", size="2", color_scheme="gray"),
-                rx.input(
-                    placeholder="Admin password",
-                    type="password",
-                    value=AdminState.password_input,
-                    on_change=AdminState.set_password_input,
-                    width="100%",
-                    size="3",
+                rx.vstack(
+                    rx.heading("Bondom Account", size="6"),
+                    rx.text("Admin sign in", size="2", color_scheme="gray"),
+                    spacing="1",
+                    align="center",
                 ),
-                rx.button(
-                    rx.icon("lock-open", size=16),
-                    "Sign in",
-                    on_click=AdminState.login,
+                rx.cond(
+                    AdminState.session_notice != "",
+                    rx.callout(
+                        AdminState.session_notice,
+                        icon="clock",
+                        color_scheme="amber",
+                        size="1",
+                        width="100%",
+                    ),
+                ),
+                rx.form(
+                    rx.vstack(
+                        rx.input(
+                            placeholder="Admin password",
+                            type="password",
+                            value=AdminState.password_input,
+                            on_change=AdminState.set_password_input,
+                            width="100%",
+                            size="3",
+                            auto_focus=True,
+                        ),
+                        rx.button(
+                            rx.icon("lock-open", size=16),
+                            "Sign in",
+                            type="submit",
+                            width="100%",
+                            size="3",
+                        ),
+                        spacing="3",
+                        width="100%",
+                    ),
+                    on_submit=lambda _form: AdminState.login,
                     width="100%",
-                    size="3",
                 ),
                 rx.cond(
                     AdminState.login_message != "",
@@ -1925,6 +2762,7 @@ def login_view() -> rx.Component:
             size="4",
         ),
         height="90vh",
+        padding="1em",
     )
 
 
@@ -1938,5 +2776,6 @@ app = rx.App(
         accent_color="indigo",
         gray_color="slate",
         radius="large",
+        scaling="100%",
     )
 )

@@ -1,35 +1,51 @@
 {% extends "base.html" %}
 {% block content %}
   <section class="hero">
-    <h1>Premium digital accounts,<br><span class="accent">delivered in seconds</span></h1>
+    <h1>Premium digital accounts,
+      <span class="hero-gradient">delivered in seconds</span></h1>
     <p class="hero-sub">Scan one KHQR with any Cambodian banking app. Your items
-       arrive instantly — here and in your Telegram chat.</p>
+      arrive instantly — here and in your Telegram chat.</p>
 
-    <ul class="trust-row" role="list">
-      <li><svg class="ic" aria-hidden="true"><use href="#i-bolt"/></svg> Instant delivery</li>
-      <li><svg class="ic" aria-hidden="true"><use href="#i-qr"/></svg> KHQR — every bank</li>
-      <li><svg class="ic" aria-hidden="true"><use href="#i-shield"/></svg> Warranty included</li>
-      <li><svg class="ic tg" aria-hidden="true"><use href="#i-tg"/></svg> Synced with Telegram</li>
+    <ul class="trust-row">
+      <li><svg class="ic ic-sm" aria-hidden="true"><use href="#i-bolt"/></svg> Instant delivery</li>
+      <li><svg class="ic ic-sm" aria-hidden="true"><use href="#i-qr"/></svg> KHQR — every bank</li>
+      <li><svg class="ic ic-sm" aria-hidden="true"><use href="#i-shield"/></svg> Warranty included</li>
+      <li><svg class="ic ic-sm ic-tg" aria-hidden="true"><use href="#i-tg"/></svg> Synced with Telegram</li>
     </ul>
 
+    {% if error %}
+      <p class="alert alert-error" role="alert" style="max-width:32rem">
+        <svg class="ic" aria-hidden="true"><use href="#i-alert"/></svg>
+        <span>{{ error }}</span>
+      </p>
+    {% endif %}
+
     {% if not session_user %}
-      <div class="login-box" id="signin">
-        <p>Sign in once with Telegram — your wallet and orders work on the website and in the bot.</p>
+      <div class="signin-panel" id="signin">
+        <p>Sign in once with Telegram — your wallet and orders stay in sync
+          across the website and the bot.</p>
         <script async src="https://telegram.org/js/telegram-widget.js?22"
                 data-telegram-login="{{ bot_username }}"
                 data-size="large"
                 data-auth-url="{{ auth_url }}"
                 data-request-access="write"></script>
-        {% if login_failed %}<p class="alert error" role="alert">Login failed — please try again.</p>{% endif %}
+        {% if login_failed %}
+          <p class="alert alert-error" role="alert">
+            <svg class="ic" aria-hidden="true"><use href="#i-alert"/></svg>
+            <span>Login failed — please try again.</span>
+          </p>
+        {% endif %}
       </div>
     {% endif %}
-    {% if error %}<p class="alert error" role="alert">⚠ {{ error }}</p>{% endif %}
   </section>
 
-  <section aria-label="Products">
+  <section aria-labelledby="catalog-heading">
+    <h2 id="catalog-heading" class="sr-only">Product catalog</h2>
+
+    {% set total = grouped.values() | map('length') | sum %}
     <div class="filter-bar" role="tablist" aria-label="Product categories">
-      <button class="pill active" data-cat="*" role="tab" aria-selected="true">
-        All <span class="pill-count">{{ grouped.values() | map('length') | sum }}</span>
+      <button class="pill" data-cat="*" role="tab" aria-selected="true">
+        All <span class="pill-count">{{ total }}</span>
       </button>
       {% for category, items in grouped.items() %}
         <button class="pill" data-cat="{{ category }}" role="tab" aria-selected="false">
@@ -41,49 +57,70 @@
     <div class="grid" id="product-grid">
       {% for category, items in grouped.items() %}
         {% for o in items %}
-          <a class="card product-card" href="/p/{{ o.product.id }}" data-cat="{{ category }}">
-            <div class="pc-head">
+          <a class="card card-interactive product-card reveal"
+             href="/p/{{ o.product.id }}" data-cat="{{ category }}">
+            <div class="pc-top">
               <span class="chip">{{ category }}</span>
               {% if show_stock %}
                 {% if o.available > 0 %}
-                  <span class="badge ok">● {{ o.available }} in stock</span>
+                  <span class="badge badge-ok"><span class="dot"></span>{{ o.available }} in stock</span>
                 {% else %}
-                  <span class="badge out">Sold out</span>
+                  <span class="badge badge-danger">Sold out</span>
                 {% endif %}
               {% endif %}
             </div>
+
             <h3>{{ o.product.name }}</h3>
+
+            {% if o.product.warranty_days %}
+              <span class="badge">
+                <svg class="ic ic-sm" aria-hidden="true"><use href="#i-shield"/></svg>
+                {{ o.product.warranty_days }}-day warranty
+              </span>
+            {% endif %}
+
             <div class="pc-foot">
-              <span class="price">${{ o.product.price }}</span>
+              <span class="price price-lg">${{ o.product.price }}</span>
               <span class="pc-cta">
-                {% if o.available > 0 %}Buy <svg class="ic" aria-hidden="true"><use href="#i-cart"/></svg>{% else %}View{% endif %}
+                {% if o.available > 0 %}Buy{% else %}View{% endif %}
+                <svg class="ic ic-sm" aria-hidden="true"><use href="#i-arrow-right"/></svg>
               </span>
             </div>
-            {% if o.product.warranty_days %}
-              <span class="badge warranty"><svg class="ic sm" aria-hidden="true"><use href="#i-shield"/></svg> {{ o.product.warranty_days }}-day warranty</span>
-            {% endif %}
           </a>
         {% endfor %}
       {% endfor %}
     </div>
-    <p class="empty-msg" id="empty-msg" hidden>No products in this category yet.</p>
-  </section>
 
-  <script>
-    const pills = document.querySelectorAll(".pill");
-    const cards = document.querySelectorAll(".product-card");
-    pills.forEach(pill => pill.addEventListener("click", () => {
-      pills.forEach(p => { p.classList.remove("active"); p.setAttribute("aria-selected", "false"); });
-      pill.classList.add("active");
-      pill.setAttribute("aria-selected", "true");
-      const cat = pill.dataset.cat;
-      let shown = 0;
-      cards.forEach(c => {
-        const show = cat === "*" || c.dataset.cat === cat;
-        c.hidden = !show;
-        if (show) shown++;
+    <div class="empty-state" id="empty-msg" hidden>
+      <span class="empty-icon"><svg class="ic" aria-hidden="true"><use href="#i-bag"/></svg></span>
+      <h3>Nothing in this category yet</h3>
+      <p class="muted">Try another category — new stock is added regularly.</p>
+    </div>
+  </section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  (function () {
+    var pills = document.querySelectorAll(".filter-bar .pill");
+    var cards = document.querySelectorAll(".product-card");
+    var empty = document.getElementById("empty-msg");
+
+    pills.forEach(function (pill) {
+      pill.addEventListener("click", function () {
+        pills.forEach(function (p) { p.setAttribute("aria-selected", "false"); });
+        pill.setAttribute("aria-selected", "true");
+
+        var cat = pill.dataset.cat;
+        var shown = 0;
+        cards.forEach(function (card) {
+          var show = cat === "*" || card.dataset.cat === cat;
+          card.hidden = !show;
+          if (show) shown++;
+        });
+        empty.hidden = shown > 0;
       });
-      document.getElementById("empty-msg").hidden = shown > 0;
-    }));
-  </script>
+    });
+  })();
+</script>
 {% endblock %}

@@ -1,27 +1,121 @@
 {% extends "base.html" %}
 {% block title %}Wallet — Bondom Account{% endblock %}
 {% block content %}
-  <div class="pay-layout">
-    <div class="card">
-      <h1 style="font-size:1.35rem">💰 My Wallet</h1>
-      <p class="price big" style="margin:.6rem 0">${{ balance }}</p>
-      <p class="muted" style="font-size:.9rem">Works everywhere — website, SMS numbers, and the Telegram bot.</p>
+  <div class="narrow stack-lg">
+    <div class="card card-lg">
+      <span class="eyebrow">Wallet balance</span>
+      <p class="balance-amount price-xl" style="margin-block:var(--sp-2) var(--sp-1)">${{ balance }}</p>
+      <p class="muted text-sm">Spendable everywhere — website, SMS numbers and
+        the Telegram bot.</p>
 
-      {% if success %}<p class="alert" style="background:var(--green-soft);border:1px solid rgba(52,211,153,.3);color:var(--green)" role="status">✅ {{ success }}</p>{% endif %}
-      {% if error %}<p class="alert error" role="alert">⚠ {{ error }}</p>{% endif %}
+      {% if success %}
+        <p class="alert alert-ok" role="status" style="margin-top:var(--sp-4)">
+          <svg class="ic" aria-hidden="true"><use href="#i-check"/></svg>
+          <span>{{ success }}</span>
+        </p>
+      {% endif %}
+      {% if error %}
+        <p class="alert alert-error" role="alert" style="margin-top:var(--sp-4)">
+          <svg class="ic" aria-hidden="true"><use href="#i-alert"/></svg>
+          <span>{{ error }}</span>
+        </p>
+      {% endif %}
 
-      <form method="post" action="/web/wallet/topup" class="buy-form" style="margin-top:1rem">
-        <label style="width:100%">Top-up amount (USD)
-          <input type="number" name="amount" min="0.10" max="500" step="0.01"
-                 placeholder="e.g. 1.00" required
-                 style="width:100%;padding:.6rem .8rem;background:var(--surface-2);border:1px solid var(--border-strong);border-radius:10px;color:var(--text);font-size:1.05rem">
-        </label>
+      <form method="post" action="/web/wallet/topup" id="topup-form"
+            class="stack" style="margin-top:var(--sp-5)">
+        <div class="field">
+          <label class="label" for="amount">Top-up amount</label>
+          <div class="input-prefixed">
+            <span class="prefix" aria-hidden="true">$</span>
+            <input class="input" id="amount" name="amount" type="number"
+                   min="0.10" max="500" step="0.01" placeholder="1.00" required
+                   inputmode="decimal" aria-describedby="amount-hint">
+          </div>
+          <p class="field-hint" id="amount-hint">Minimum $0.10 &middot; maximum $500.00</p>
+          <p class="field-error" id="amount-error" hidden>
+            <svg class="ic ic-sm" aria-hidden="true"><use href="#i-alert"/></svg>
+            <span></span>
+          </p>
+        </div>
+
+        <div class="row" style="gap:var(--sp-2)">
+          {% for preset in [1, 5, 10, 20] %}
+            <button type="button" class="pill" data-amount="{{ preset }}">${{ preset }}.00</button>
+          {% endfor %}
+        </div>
+
         <button type="submit" class="btn btn-primary btn-lg btn-block">
-          <svg class="ic" aria-hidden="true"><use href="#i-qr"/></svg> Top up with KHQR
+          <svg class="ic" aria-hidden="true"><use href="#i-qr"/></svg>
+          Top up with KHQR
         </button>
       </form>
-      <p class="hint">Scan with ABA, ACLEDA, Wing, Bakong or any Cambodian banking app.
-        Balance is credited automatically after payment.</p>
+
+      <p class="field-hint" style="margin-top:var(--sp-3)">
+        Scan with ABA, ACLEDA, Wing, Bakong or any Cambodian banking app.
+        Your balance is credited automatically once payment confirms.
+      </p>
+    </div>
+
+    <div class="card">
+      <h2 style="font-size:var(--fs-md);margin-bottom:var(--sp-4)">How your wallet works</h2>
+      <div class="how-steps">
+        <div class="how-step">
+          <span class="how-num">1</span>
+          <p>Top up any amount by scanning a KHQR with your banking app.</p>
+        </div>
+        <div class="how-step">
+          <span class="how-num">2</span>
+          <p>Your balance is credited automatically — usually within seconds.</p>
+        </div>
+        <div class="how-step">
+          <span class="how-num">3</span>
+          <p>Spend it instantly on SMS numbers without scanning again.</p>
+        </div>
+      </div>
     </div>
   </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  (function () {
+    var form = document.getElementById("topup-form");
+    var input = document.getElementById("amount");
+    var err = document.getElementById("amount-error");
+    var errText = err.querySelector("span");
+
+    document.querySelectorAll("[data-amount]").forEach(function (b) {
+      b.addEventListener("click", function () {
+        input.value = parseFloat(b.dataset.amount).toFixed(2);
+        validate();
+        input.focus();
+      });
+    });
+
+    function validate() {
+      var v = parseFloat(input.value);
+      var message = "";
+      if (input.value === "") message = "";
+      else if (isNaN(v)) message = "Enter a valid amount.";
+      else if (v < 0.1) message = "The minimum top-up is $0.10.";
+      else if (v > 500) message = "The maximum top-up is $500.00.";
+
+      var invalid = message !== "";
+      err.hidden = !invalid;
+      input.setAttribute("aria-invalid", invalid ? "true" : "false");
+      if (invalid) errText.textContent = message;
+      return !invalid && input.value !== "";
+    }
+
+    input.addEventListener("input", validate);
+    input.addEventListener("blur", validate);
+
+    form.addEventListener("submit", function (e) {
+      if (!validate()) { e.preventDefault(); input.focus(); return; }
+      var btn = form.querySelector('button[type="submit"]');
+      btn.setAttribute("aria-disabled", "true");
+      btn.innerHTML = '<span class="spinner"></span> Generating QR…';
+    });
+  })();
+</script>
 {% endblock %}
