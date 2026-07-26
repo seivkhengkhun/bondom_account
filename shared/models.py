@@ -271,3 +271,90 @@ class SmsOrder(Base):
     last_checked_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+
+
+# --------------------------------------------------------------------------- #
+# Admin activity log
+# --------------------------------------------------------------------------- #
+class AdminAuditLog(Base):
+    """Append-only record of privileged admin actions.
+
+    Anything that destroys data or moves money is written here before or
+    immediately after it happens, so there is always an answer to "who
+    did this, when, and why".
+    """
+
+    __tablename__ = "admin_audit_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # Free-form actor label. Today the panel has a single shared login, so
+    # this is "admin"; it becomes meaningful the moment multiple admin
+    # accounts exist, without needing a schema change.
+    actor: Mapped[str] = mapped_column(String(64), default="admin", index=True)
+    action: Mapped[str] = mapped_column(String(64), index=True)
+    target_type: Mapped[str] = mapped_column(String(32), default="", index=True)
+    target_id: Mapped[str] = mapped_column(String(64), default="", index=True)
+    summary: Mapped[str] = mapped_column(Text, default="")
+    reason: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Public API
+# --------------------------------------------------------------------------- #
+class ApiKey(Base):
+    """A third-party integration credential owned by a user.
+
+    Only a SHA-256 hash of the key is stored — the plaintext is shown
+    once at creation and can never be recovered, so a database leak does
+    not hand over working credentials. ``prefix`` is the short public
+    fragment used to identify a key in listings and logs.
+    """
+
+    __tablename__ = "api_keys"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(64), default="")
+    prefix: Mapped[str] = mapped_column(String(24), index=True)
+    key_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    # Comma-separated scopes, e.g. "read,orders,sms".
+    scopes: Mapped[str] = mapped_column(String(128), default="read")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    rate_limit_per_min: Mapped[int] = mapped_column(Integer, default=60)
+    request_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    last_used_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class ApiRequestLog(Base):
+    """One row per authenticated API request, for the developer portal."""
+
+    __tablename__ = "api_request_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    api_key_id: Mapped[int | None] = mapped_column(
+        ForeignKey("api_keys.id", ondelete="CASCADE"), index=True, nullable=True
+    )
+    user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=True
+    )
+    method: Mapped[str] = mapped_column(String(8), default="GET")
+    path: Mapped[str] = mapped_column(String(255), default="")
+    status_code: Mapped[int] = mapped_column(Integer, default=200, index=True)
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+    ip: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )

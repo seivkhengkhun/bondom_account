@@ -7,6 +7,7 @@ or together with the bot via:
 """
 
 import asyncio
+import logging
 from contextlib import asynccontextmanager
 from collections.abc import AsyncGenerator
 from typing import Annotated
@@ -74,6 +75,76 @@ app.mount(
     StaticFiles(directory=str(Path(__file__).parent.parent / "webshop" / "static")),
     name="webshop-static",
 )
+
+# --------------------------------------------------------------------------- #
+# Public API v1 — API-key authenticated, intentionally reachable from the
+# internet (unlike the internal endpoints below, which nginx blocks).
+# --------------------------------------------------------------------------- #
+import time as _time
+
+from app.api.v1.deps import ApiError, error_response, new_request_id
+from app.api.v1.routes import router as api_v1_router
+from shared import api_keys as _api_keys
+from shared.database import AsyncSessionLocal as _Session
+
+app.include_router(api_v1_router)
+
+
+@app.exception_handler(ApiError)
+async def api_error_handler(request: Request, exc: ApiError) -> JSONResponse:
+    response = error_response(exc, getattr(request.state, "request_id", ""))
+    if exc.code == "rate_limit_exceeded":
+        response.headers["Retry-After"] = str(exc.extra.get("retry_after", 60))
+    return response
+
+
+@app.middleware("http")
+async def api_v1_observability(request: Request, call_next):
+    """Attach a request id, rate-limit headers, and log API usage.
+
+    Only /api/v1 traffic is touched; the storefront is left alone so page
+    rendering pays nothing for this.
+    """
+    if not request.url.path.startswith("/api/v1"):
+        return await call_next(request)
+
+    request.state.request_id = new_request_id()
+    started = _time.perf_counter()
+    response = await call_next(request)
+    duration_ms = int((_time.perf_counter() - started) * 1000)
+
+    response.headers["X-Request-Id"] = request.state.request_id
+    response.headers["X-API-Version"] = "v1"
+
+    rl = getattr(request.state, "rate_limit", None)
+    if rl is not None:
+        response.headers["X-RateLimit-Limit"] = str(rl.limit)
+        response.headers["X-RateLimit-Remaining"] = str(rl.remaining)
+        response.headers["X-RateLimit-Reset"] = str(rl.reset_in)
+
+    key_id = getattr(request.state, "api_key_id", None)
+    user_id = getattr(request.state, "api_user_id", None)
+    if key_id is not None:
+        # Usage accounting must never break the response the client gets.
+        try:
+            async with _Session() as session:
+                await _api_keys.touch_key(session, key_id)
+                await _api_keys.log_request(
+                    session,
+                    api_key_id=key_id,
+                    user_id=user_id,
+                    method=request.method,
+                    path=request.url.path,
+                    status_code=response.status_code,
+                    duration_ms=duration_ms,
+                    ip=request.headers.get(
+                        "x-real-ip", request.client.host if request.client else ""
+                    ),
+                )
+        except Exception:
+            logging.getLogger(__name__).exception("API usage logging failed")
+
+    return response
 
 
 # --------------------------------------------------------------------------- #
