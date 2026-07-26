@@ -89,6 +89,11 @@ from shared.database import AsyncSessionLocal as _Session
 
 app.include_router(api_v1_router)
 
+# Developer portal (HTML, Telegram-session auth) lives on the storefront.
+from app.webshop.developer import router as developer_router
+
+app.include_router(developer_router)
+
 
 @app.exception_handler(ApiError)
 async def api_error_handler(request: Request, exc: ApiError) -> JSONResponse:

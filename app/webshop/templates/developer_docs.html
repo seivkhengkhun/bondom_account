@@ -1,0 +1,310 @@
+{% extends "base.html" %}
+{% block title %}API documentation — Bondom Account{% endblock %}
+{% block content %}
+  <nav class="breadcrumb" aria-label="Breadcrumb">
+    <a href="/developer">Developers</a>
+    <span class="sep" aria-hidden="true">/</span>
+    <span class="current">API documentation</span>
+  </nav>
+
+  <div class="page-head">
+    <div>
+      <h1>API documentation</h1>
+      <p class="sub">Bondom Account public API, version 1.</p>
+    </div>
+    <a class="btn btn-primary" href="/developer">
+      <svg class="ic ic-sm" aria-hidden="true"><use href="#i-plus"/></svg>
+      Get an API key
+    </a>
+  </div>
+
+  <div class="stack-lg">
+    <section class="card card-lg">
+      <h2 style="font-size:var(--fs-lg)">Base URL</h2>
+      <div class="cred-row" style="margin-top:var(--sp-3)">
+        <code>{{ base_url }}/api/v1</code>
+        <button class="btn btn-ghost btn-sm copy-btn" data-copy="{{ base_url }}/api/v1">
+          <svg class="ic ic-sm" aria-hidden="true"><use href="#i-copy"/></svg>
+          <span class="copy-label">Copy</span>
+        </button>
+      </div>
+      <p class="muted text-sm" style="margin-top:var(--sp-3)">
+        All responses are JSON. The API version is in the path, so
+        <code>/api/v1</code> will not change shape underneath you.
+      </p>
+    </section>
+
+    <section class="card card-lg">
+      <h2 style="font-size:var(--fs-lg)">Authentication</h2>
+      <p class="muted text-sm" style="margin-block:var(--sp-2) var(--sp-3)">
+        Send your key on every request, either way:
+      </p>
+      <pre class="input" style="white-space:pre-wrap">Authorization: Bearer bk_live_xxxxxxxx_yyyyyyyyyyyy
+X-API-Key: bk_live_xxxxxxxx_yyyyyyyyyyyy</pre>
+      <p class="muted text-sm" style="margin-top:var(--sp-3)">
+        Keys are shown once at creation and stored only as a hash — we
+        cannot recover one for you. Treat a key like a password: keep it
+        server-side, never in browser or mobile code, and revoke it
+        immediately if it leaks.
+      </p>
+
+      <h3 style="font-size:var(--fs-md);margin-top:var(--sp-5)">Scopes</h3>
+      <div class="stack-sm" style="margin-top:var(--sp-2)">
+        {% for scope, description in scopes.items() %}
+          <div class="row-between">
+            <code>{{ scope }}</code>
+            <span class="muted text-sm">{{ description }}</span>
+          </div>
+        {% endfor %}
+      </div>
+    </section>
+
+    <section class="card card-lg">
+      <h2 style="font-size:var(--fs-lg)">Rate limits</h2>
+      <p class="muted text-sm" style="margin-block:var(--sp-2) var(--sp-3)">
+        {{ rate_limit }} requests per minute per key, on a sliding window.
+        Every response carries your current position:
+      </p>
+      <pre class="input" style="white-space:pre-wrap">X-RateLimit-Limit: {{ rate_limit }}
+X-RateLimit-Remaining: 57
+X-RateLimit-Reset: 60</pre>
+      <p class="muted text-sm" style="margin-top:var(--sp-3)">
+        Exceeding it returns <code>429</code> with a <code>Retry-After</code>
+        header. Back off for that many seconds rather than retrying
+        immediately.
+      </p>
+    </section>
+
+    <section class="card card-lg">
+      <h2 style="font-size:var(--fs-lg)">Endpoints</h2>
+      <div style="overflow-x:auto;margin-top:var(--sp-3)">
+        <table style="width:100%;border-collapse:collapse;font-size:var(--fs-sm)">
+          <thead>
+            <tr style="text-align:left;color:var(--text-muted)">
+              <th style="padding:var(--sp-2)">Method</th>
+              <th style="padding:var(--sp-2)">Path</th>
+              <th style="padding:var(--sp-2)">Scope</th>
+              <th style="padding:var(--sp-2)">Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% set rows = [
+              ("GET", "/ping", "—", "Health check, no authentication"),
+              ("GET", "/me", "read", "Your account and wallet balance"),
+              ("GET", "/products", "read", "List products (filters: category, in_stock_only)"),
+              ("GET", "/products/{id}", "read", "One product"),
+              ("POST", "/orders", "orders", "Buy a product using your wallet balance"),
+              ("GET", "/orders", "read", "Your orders"),
+              ("GET", "/orders/{id}", "read", "One order, with delivered items"),
+              ("GET", "/sms/countries", "sms", "Available SMS numbers and prices"),
+              ("POST", "/sms/orders", "sms", "Rent an SMS number"),
+              ("GET", "/sms/orders/{id}", "sms", "Poll an SMS order for its code"),
+            ] %}
+            {% for method, path, scope, desc in rows %}
+              <tr style="border-top:1px solid var(--border)">
+                <td style="padding:var(--sp-2)">
+                  <span class="badge {% if method == 'POST' %}badge-warn{% else %}badge-ok{% endif %}">{{ method }}</span>
+                </td>
+                <td style="padding:var(--sp-2)"><code>{{ path }}</code></td>
+                <td style="padding:var(--sp-2)"><code class="muted">{{ scope }}</code></td>
+                <td style="padding:var(--sp-2)" class="muted">{{ desc }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card card-lg">
+      <h2 style="font-size:var(--fs-lg)">Example: buy a product</h2>
+      <p class="muted text-sm" style="margin-block:var(--sp-2) var(--sp-3)">
+        Purchases are paid from your wallet balance — top up at
+        <a href="/wallet">/wallet</a>. There is no card flow in the API.
+      </p>
+      <p class="eyebrow">Request</p>
+      <pre class="input" style="white-space:pre-wrap">POST {{ base_url }}/api/v1/orders
+X-API-Key: bk_live_xxxxxxxx_yyyyyyyyyyyy
+Content-Type: application/json
+
+{"product_id": 2, "quantity": 1}</pre>
+      <p class="eyebrow" style="margin-top:var(--sp-4)">Response 201</p>
+      <pre class="input" style="white-space:pre-wrap">{
+  "id": 42,
+  "status": "delivered",
+  "total_price": "0.01",
+  "created_at": "2026-07-26T10:15:00",
+  "items": ["user@example.com|password123"]
+}</pre>
+    </section>
+
+    <section class="card card-lg">
+      <h2 style="font-size:var(--fs-lg)">Errors</h2>
+      <p class="muted text-sm" style="margin-block:var(--sp-2) var(--sp-3)">
+        Every failure uses the same shape, so you only need one handler:
+      </p>
+      <pre class="input" style="white-space:pre-wrap">{
+  "error": {
+    "code": "insufficient_balance",
+    "message": "Wallet balance $0.50 is short of $10.00.",
+    "status": 402,
+    "request_id": "9f2c1a77b0e34d18"
+  }
+}</pre>
+      <p class="muted text-sm" style="margin-top:var(--sp-3)">
+        Quote the <code>request_id</code> in any support message — it
+        identifies the exact call in our logs.
+      </p>
+
+      <div style="overflow-x:auto;margin-top:var(--sp-4)">
+        <table style="width:100%;border-collapse:collapse;font-size:var(--fs-sm)">
+          <thead>
+            <tr style="text-align:left;color:var(--text-muted)">
+              <th style="padding:var(--sp-2)">Status</th>
+              <th style="padding:var(--sp-2)">Code</th>
+              <th style="padding:var(--sp-2)">Meaning</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% set errs = [
+              ("400", "invalid_service", "A parameter was not valid"),
+              ("401", "missing_api_key", "No key was sent"),
+              ("401", "invalid_api_key", "Key is wrong or revoked"),
+              ("402", "insufficient_balance", "Wallet balance too low — top up"),
+              ("403", "insufficient_scope", "Key lacks the required scope"),
+              ("403", "account_suspended", "The account is suspended"),
+              ("404", "product_not_found", "No such product"),
+              ("404", "order_not_found", "No such order, or not yours"),
+              ("409", "out_of_stock", "Not enough stock left"),
+              ("429", "rate_limit_exceeded", "Slow down; see Retry-After"),
+              ("503", "provider_unavailable", "SMS provider is down"),
+            ] %}
+            {% for status, code, meaning in errs %}
+              <tr style="border-top:1px solid var(--border)">
+                <td style="padding:var(--sp-2)"><code>{{ status }}</code></td>
+                <td style="padding:var(--sp-2)"><code>{{ code }}</code></td>
+                <td style="padding:var(--sp-2)" class="muted">{{ meaning }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card card-lg">
+      <h2 style="font-size:var(--fs-lg);margin-bottom:var(--sp-4)">SDK examples</h2>
+
+      <div class="filter-bar" role="tablist" aria-label="Language">
+        {% for lang in ["cURL", "JavaScript", "PHP", "Python"] %}
+          <button class="pill" role="tab" data-lang="{{ lang }}"
+                  aria-selected="{{ 'true' if loop.first else 'false' }}">{{ lang }}</button>
+        {% endfor %}
+      </div>
+
+      <pre class="input sdk-sample" data-lang="cURL" style="white-space:pre-wrap">curl -X POST {{ base_url }}/api/v1/orders \
+  -H "X-API-Key: $BONDOM_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"product_id": 2, "quantity": 1}'</pre>
+
+      <pre class="input sdk-sample" data-lang="JavaScript" hidden style="white-space:pre-wrap">const BASE = "{{ base_url }}/api/v1";
+
+async function buy(productId, quantity = 1) {
+  const res = await fetch(`${BASE}/orders`, {
+    method: "POST",
+    headers: {
+      "X-API-Key": process.env.BONDOM_API_KEY,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ product_id: productId, quantity }),
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    // Every failure has the same shape.
+    throw new Error(`${data.error.code}: ${data.error.message}`);
+  }
+  return data.items;          // delivered credentials
+}
+
+buy(2).then(console.log).catch(console.error);</pre>
+
+      <pre class="input sdk-sample" data-lang="PHP" hidden style="white-space:pre-wrap">&lt;?php
+$base = "{{ base_url }}/api/v1";
+
+function bondom($method, $path, $body = null) {
+    global $base;
+    $ch = curl_init($base . $path);
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER =&gt; true,
+        CURLOPT_CUSTOMREQUEST  =&gt; $method,
+        CURLOPT_HTTPHEADER     =&gt; [
+            "X-API-Key: " . getenv("BONDOM_API_KEY"),
+            "Content-Type: application/json",
+        ],
+        CURLOPT_POSTFIELDS =&gt; $body ? json_encode($body) : null,
+    ]);
+    $raw    = curl_exec($ch);
+    $status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    $data = json_decode($raw, true);
+    if ($status &gt;= 400) {
+        throw new Exception($data["error"]["code"] . ": " . $data["error"]["message"]);
+    }
+    return $data;
+}
+
+$order = bondom("POST", "/orders", ["product_id" =&gt; 2, "quantity" =&gt; 1]);
+print_r($order["items"]);</pre>
+
+      <pre class="input sdk-sample" data-lang="Python" hidden style="white-space:pre-wrap">import os
+import requests
+
+BASE = "{{ base_url }}/api/v1"
+SESSION = requests.Session()
+SESSION.headers["X-API-Key"] = os.environ["BONDOM_API_KEY"]
+
+
+class BondomError(Exception):
+    pass
+
+
+def request(method, path, **kwargs):
+    res = SESSION.request(method, BASE + path, timeout=30, **kwargs)
+    data = res.json()
+    if not res.ok:
+        err = data["error"]
+        raise BondomError(f"{err['code']}: {err['message']}")
+    return data
+
+
+def buy(product_id: int, quantity: int = 1) -> list[str]:
+    order = request("POST", "/orders",
+                    json={"product_id": product_id, "quantity": quantity})
+    return order["items"]
+
+
+print(buy(2))</pre>
+    </section>
+  </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  (function () {
+    var pills = document.querySelectorAll("[data-lang]");
+    var samples = document.querySelectorAll(".sdk-sample");
+    pills.forEach(function (pill) {
+      if (pill.tagName !== "BUTTON") return;
+      pill.addEventListener("click", function () {
+        pills.forEach(function (p) {
+          if (p.tagName === "BUTTON") p.setAttribute("aria-selected", "false");
+        });
+        pill.setAttribute("aria-selected", "true");
+        samples.forEach(function (s) {
+          s.hidden = s.dataset.lang !== pill.dataset.lang;
+        });
+      });
+    });
+  })();
+</script>
+{% endblock %}

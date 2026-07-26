@@ -1,0 +1,255 @@
+{% extends "base.html" %}
+{% block title %}Developers — Bondom Account{% endblock %}
+{% block content %}
+  <div class="page-head">
+    <div>
+      <h1>Developers</h1>
+      <p class="sub">Build Bondom Account into your own site or app.</p>
+    </div>
+    <a class="btn btn-outline" href="/developer/docs">
+      Read the docs
+      <svg class="ic ic-sm" aria-hidden="true"><use href="#i-arrow-right"/></svg>
+    </a>
+  </div>
+
+  {% if success %}
+    <p class="alert alert-ok" role="status" style="margin-bottom:var(--sp-4)">
+      <svg class="ic" aria-hidden="true"><use href="#i-check"/></svg>
+      <span>{{ success }}</span>
+    </p>
+  {% endif %}
+  {% if error %}
+    <p class="alert alert-error" role="alert" style="margin-bottom:var(--sp-4)">
+      <svg class="ic" aria-hidden="true"><use href="#i-alert"/></svg>
+      <span>{{ error }}</span>
+    </p>
+  {% endif %}
+
+  {% if new_key %}
+    {# Shown once. The plaintext is never stored, so it cannot be shown again. #}
+    <div class="card card-lg" style="border-color:var(--ok);margin-bottom:var(--sp-5)">
+      <p class="note-title" style="color:var(--ok)">
+        <svg class="ic ic-sm" aria-hidden="true"><use href="#i-check"/></svg>
+        Your new API key
+      </p>
+      <p class="muted text-sm" style="margin-bottom:var(--sp-3)">
+        Copy it now — for your security it is stored only as a hash and
+        cannot be shown again.
+      </p>
+      <div class="cred-row">
+        <code style="font-size:var(--fs-sm)">{{ new_key }}</code>
+        <button class="btn btn-primary btn-sm copy-btn" data-copy="{{ new_key }}">
+          <svg class="ic ic-sm" aria-hidden="true"><use href="#i-copy"/></svg>
+          <span class="copy-label">Copy</span>
+        </button>
+      </div>
+    </div>
+  {% endif %}
+
+  <div class="stack-lg">
+    {# ------------------------------------------------------------ usage #}
+    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(11rem,1fr))">
+      <div class="card">
+        <span class="eyebrow">Total requests</span>
+        <p class="balance-amount" style="font-size:var(--fs-xl)">{{ usage.total }}</p>
+      </div>
+      <div class="card">
+        <span class="eyebrow">Errors</span>
+        <p class="balance-amount" style="font-size:var(--fs-xl);color:{% if usage.errors %}var(--danger){% else %}inherit{% endif %}">{{ usage.errors }}</p>
+      </div>
+      <div class="card">
+        <span class="eyebrow">Avg response</span>
+        <p class="balance-amount" style="font-size:var(--fs-xl)">{{ usage.avg_ms }}<span class="price-unit">ms</span></p>
+      </div>
+      <div class="card">
+        <span class="eyebrow">Active keys</span>
+        <p class="balance-amount" style="font-size:var(--fs-xl)">
+          {{ keys | selectattr("is_active") | list | length }}<span class="price-unit">/ {{ max_keys }}</span>
+        </p>
+      </div>
+    </div>
+
+    {# ------------------------------------------------------------- keys #}
+    <section class="card card-lg">
+      <h2 style="font-size:var(--fs-lg);margin-bottom:var(--sp-4)">API keys</h2>
+
+      {% if keys %}
+        <div class="list" style="margin-bottom:var(--sp-5)">
+          {% for k in keys %}
+            <div class="card list-row" style="grid-template-columns:minmax(0,1fr) auto auto">
+              <div class="lr-main">
+                <span class="lr-title">
+                  {{ k.name }}
+                  <code class="text-xs muted">bk_live_{{ k.prefix }}…</code>
+                </span>
+                <span class="lr-sub">
+                  {{ k.scopes }} &middot; {{ k.request_count }} request{{ "s" if k.request_count != 1 }}
+                  {% if k.last_used_at %} &middot; last used {{ k.last_used_at.strftime("%d %b %H:%M") }}{% endif %}
+                </span>
+              </div>
+              <span class="badge {% if k.is_active %}badge-ok{% else %}badge-danger{% endif %}">
+                {{ "active" if k.is_active else "revoked" }}
+              </span>
+              {% if k.is_active %}
+                <form method="post" action="/developer/keys/{{ k.id }}/revoke"
+                      onsubmit="return confirm('Revoke this key? Any integration using it will stop working immediately.')">
+                  <button type="submit" class="btn btn-danger btn-sm">Revoke</button>
+                </form>
+              {% else %}
+                <span class="muted text-xs">—</span>
+              {% endif %}
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p class="muted text-sm" style="margin-bottom:var(--sp-4)">
+          You have no API keys yet. Create one to start integrating.
+        </p>
+      {% endif %}
+
+      <form method="post" action="/developer/keys" class="stack">
+        <div class="field">
+          <label class="label" for="key-name">Key name</label>
+          <input class="input" id="key-name" name="name" maxlength="64"
+                 placeholder="e.g. My reseller site" required>
+        </div>
+        <div class="field">
+          <span class="label">Permissions</span>
+          {% for scope, description in scopes.items() %}
+            <label class="row" style="gap:var(--sp-2);align-items:flex-start">
+              <input type="checkbox" name="scope_{{ scope }}" value="1"
+                     {% if scope == "read" %}checked{% endif %}>
+              <span>
+                <code>{{ scope }}</code>
+                <span class="muted text-sm"> — {{ description }}</span>
+              </span>
+            </label>
+          {% endfor %}
+        </div>
+        <button type="submit" class="btn btn-primary">
+          <svg class="ic ic-sm" aria-hidden="true"><use href="#i-plus"/></svg>
+          Create API key
+        </button>
+      </form>
+    </section>
+
+    {# -------------------------------------------------------- playground #}
+    <section class="card card-lg">
+      <h2 style="font-size:var(--fs-lg)">API playground</h2>
+      <p class="muted text-sm" style="margin-bottom:var(--sp-4)">
+        Send a real request from your browser. Requests count against your
+        rate limit and any purchase spends your wallet.
+      </p>
+
+      <div class="stack">
+        <div class="field">
+          <label class="label" for="pg-key">API key</label>
+          <input class="input" id="pg-key" type="password"
+                 placeholder="bk_live_…" autocomplete="off">
+        </div>
+        <div class="row" style="gap:var(--sp-2)">
+          <select class="input" id="pg-method" style="width:auto">
+            <option>GET</option>
+            <option>POST</option>
+          </select>
+          <input class="input" id="pg-path" value="/api/v1/me" style="flex:1;min-width:12rem">
+        </div>
+        <div class="field">
+          <label class="label" for="pg-body">Request body (JSON, POST only)</label>
+          <textarea class="input" id="pg-body" rows="3"
+                    placeholder='{"product_id": 2, "quantity": 1}'></textarea>
+        </div>
+        <button class="btn btn-primary" id="pg-send" type="button">Send request</button>
+        <div class="field">
+          <span class="label">Response</span>
+          <pre class="input" id="pg-out" style="white-space:pre-wrap;min-height:7rem;overflow:auto">—</pre>
+        </div>
+      </div>
+    </section>
+
+    {# ------------------------------------------------------------- logs #}
+    <section class="card card-lg">
+      <h2 style="font-size:var(--fs-lg);margin-bottom:var(--sp-4)">Recent requests</h2>
+      {% if logs %}
+        <div style="overflow-x:auto">
+          <table style="width:100%;border-collapse:collapse;font-size:var(--fs-sm)">
+            <thead>
+              <tr style="text-align:left;color:var(--text-muted)">
+                <th style="padding:var(--sp-2)">When</th>
+                <th style="padding:var(--sp-2)">Method</th>
+                <th style="padding:var(--sp-2)">Path</th>
+                <th style="padding:var(--sp-2)">Status</th>
+                <th style="padding:var(--sp-2)">Time</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for l in logs %}
+                <tr style="border-top:1px solid var(--border)">
+                  <td style="padding:var(--sp-2)" class="muted nowrap">{{ l.created_at.strftime("%d %b %H:%M:%S") }}</td>
+                  <td style="padding:var(--sp-2)"><code>{{ l.method }}</code></td>
+                  <td style="padding:var(--sp-2)"><code>{{ l.path }}</code></td>
+                  <td style="padding:var(--sp-2)">
+                    <span class="badge {% if l.status_code < 400 %}badge-ok{% elif l.status_code == 429 %}badge-warn{% else %}badge-danger{% endif %}">
+                      {{ l.status_code }}
+                    </span>
+                  </td>
+                  <td style="padding:var(--sp-2)" class="muted">{{ l.duration_ms }}ms</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <p class="muted text-sm">No API requests yet.</p>
+      {% endif %}
+    </section>
+  </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  (function () {
+    var send = document.getElementById("pg-send");
+    if (!send) return;
+    var out = document.getElementById("pg-out");
+
+    send.addEventListener("click", async function () {
+      var key = document.getElementById("pg-key").value.trim();
+      var method = document.getElementById("pg-method").value;
+      var path = document.getElementById("pg-path").value.trim();
+      var body = document.getElementById("pg-body").value.trim();
+
+      if (!key) { out.textContent = "Enter an API key first."; return; }
+      if (!path.startsWith("/api/v1")) {
+        out.textContent = "Path must start with /api/v1"; return;
+      }
+
+      send.setAttribute("aria-disabled", "true");
+      out.textContent = "Sending…";
+
+      var opts = { method: method, headers: { "X-API-Key": key } };
+      if (method === "POST" && body) {
+        opts.headers["Content-Type"] = "application/json";
+        opts.body = body;
+      }
+
+      try {
+        var res = await fetch(path, opts);
+        var text = await res.text();
+        var pretty;
+        try { pretty = JSON.stringify(JSON.parse(text), null, 2); }
+        catch (e) { pretty = text; }
+
+        var limit = res.headers.get("X-RateLimit-Remaining");
+        out.textContent =
+          "HTTP " + res.status + (limit !== null ? "  ·  " + limit + " requests left this minute" : "") +
+          "\n\n" + pretty;
+      } catch (err) {
+        out.textContent = "Request failed: " + err.message;
+      } finally {
+        send.removeAttribute("aria-disabled");
+      }
+    });
+  })();
+</script>
+{% endblock %}

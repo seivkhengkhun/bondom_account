@@ -29,7 +29,7 @@ if str(PROJECT_ROOT) not in sys.path:
 import reflex as rx
 from aiogram import Bot
 
-from shared import admin_auth, services
+from shared import admin_auth, audit, services
 from shared.config import settings
 from shared.database import AsyncSessionLocal
 from shared.schemas import ProductCreate
@@ -75,6 +75,17 @@ class UserRow:
     is_active: bool
     is_blocked: bool
     balance: str
+
+
+@dataclasses.dataclass
+class AuditRow:
+    id: int
+    actor: str
+    action: str
+    target: str
+    summary: str
+    reason: str
+    created_at: str
 
 
 @dataclasses.dataclass
@@ -180,6 +191,12 @@ class AdminState(rx.State):
     del_reason: str = ""
     del_message: str = ""
     del_done: bool = False
+    del_reason_input: str = ""
+
+    # Activity log
+    audit_rows: list[AuditRow] = []
+    audit_filter: str = "all"
+    audit_search: str = ""
 
     # Table search boxes
     product_search: str = ""
@@ -197,6 +214,27 @@ class AdminState(rx.State):
 
     def set_sms_search(self, v: str) -> None:
         self.sms_search = v
+
+    def set_audit_search(self, v: str) -> None:
+        self.audit_search = v
+
+    @rx.var
+    def filtered_audit(self) -> list[AuditRow]:
+        q = self.audit_search.strip().lower()
+        if not q:
+            return self.audit_rows
+        return [
+            e
+            for e in self.audit_rows
+            if q in e.action.lower()
+            or q in e.summary.lower()
+            or q in e.reason.lower()
+            or q in e.target.lower()
+        ]
+
+    @rx.var
+    def audit_result_count(self) -> int:
+        return len(self.filtered_audit)
 
     def set_sms_markup(self, v: str) -> None:
         self.sms_markup = v
@@ -564,6 +602,10 @@ class AdminState(rx.State):
         self.password_message = (
             "Password updated. The previous password no longer works."
         )
+        await audit.log_action(
+            audit.ACTION_PASSWORD_CHANGE,
+            summary="Admin password changed",
+        )
         return rx.toast.success("Admin password changed")
 
     # ----------------------------------------------------------------- #
@@ -579,6 +621,19 @@ class AdminState(rx.State):
             users = await services.list_users(session, limit=200)
             blocked_user_ids = await services.list_blocked_user_ids(session)
             self.bot_show_stock = await services.get_bot_show_stock(session)
+            entries = await audit.list_entries(session, limit=400)
+        self.audit_rows = [
+            AuditRow(
+                id=e.id,
+                actor=e.actor,
+                action=e.action,
+                target=e.target,
+                summary=e.summary,
+                reason=e.reason,
+                created_at=e.created_at,
+            )
+            for e in entries
+        ]
 
         self.stat_users = stats.total_users
         self.stat_orders = stats.total_orders
@@ -894,6 +949,7 @@ class AdminState(rx.State):
         self.touch()
         self.del_message = ""
         self.del_done = False
+        self.del_reason_input = ""
         async with AsyncSessionLocal() as session:
             impact = await services.get_user_delete_impact(session, user_id)
 
@@ -907,9 +963,13 @@ class AdminState(rx.State):
         self.del_can_delete = impact.can_delete
         self.del_reason = impact.blocked_reason
 
+    def set_del_reason(self, v: str) -> None:
+        self.del_reason_input = v
+
     def close_delete_dialog(self) -> None:
         self.del_message = ""
         self.del_done = False
+        self.del_reason_input = ""
 
     async def confirm_delete_user(self):
         if not self.authed:
@@ -931,6 +991,18 @@ class AdminState(rx.State):
             self.del_done = True
             await self.load_all()
             return
+
+        await audit.log_action(
+            audit.ACTION_USER_DELETE,
+            target_type="user",
+            target_id=user_id,
+            summary=(
+                f"Deleted {username} (telegram {self.del_telegram_id}); "
+                f"removed {self.del_sms} SMS order(s), "
+                f"{self.del_topups} top-up(s), wallet ${self.del_balance}"
+            ),
+            reason=self.del_reason_input.strip(),
+        )
 
         self.del_done = True
         self.del_message = f"{username} was permanently deleted."
@@ -974,6 +1046,15 @@ class AdminState(rx.State):
             f"Credited ${amount:.2f}. New balance ${updated:.2f}."
         )
         self.user_adjust_amount = ""
+        await audit.log_action(
+            audit.ACTION_WALLET_CREDIT,
+            target_type="user",
+            target_id=user_id,
+            summary=(
+                f"Credited ${amount:.2f} to {self.wallet_username}; "
+                f"new balance ${updated:.2f}"
+            ),
+        )
         await self.load_all()
         return rx.toast.success(
             f"Credited ${amount:.2f} to {self.wallet_username}"
@@ -1007,6 +1088,15 @@ class AdminState(rx.State):
             f"Debited ${amount:.2f}. New balance ${updated:.2f}."
         )
         self.user_adjust_amount = ""
+        await audit.log_action(
+            audit.ACTION_WALLET_DEBIT,
+            target_type="user",
+            target_id=user_id,
+            summary=(
+                f"Debited ${amount:.2f} from {self.wallet_username}; "
+                f"new balance ${updated:.2f}"
+            ),
+        )
         await self.load_all()
         return rx.toast.success(
             f"Debited ${amount:.2f} from {self.wallet_username}"
@@ -2154,6 +2244,25 @@ def delete_user_dialog(u: UserRow) -> rx.Component:
                             ),
                         ),
                         rx.cond(
+                            AdminState.del_can_delete,
+                            rx.vstack(
+                                rx.text(
+                                    "Reason (recorded in the activity log)",
+                                    size="1",
+                                    weight="medium",
+                                ),
+                                rx.input(
+                                    placeholder="e.g. spam, abuse, rule violation",
+                                    value=AdminState.del_reason_input,
+                                    on_change=AdminState.set_del_reason,
+                                    width="100%",
+                                    size="2",
+                                ),
+                                spacing="1",
+                                width="100%",
+                            ),
+                        ),
+                        rx.cond(
                             AdminState.del_message != "",
                             rx.callout(
                                 AdminState.del_message,
@@ -2713,6 +2822,99 @@ def overview_tab() -> rx.Component:
 
 
 # --------------------------------------------------------------------------- #
+# Activity tab — admin audit log
+# --------------------------------------------------------------------------- #
+def _audit_row(e: AuditRow) -> rx.Component:
+    return rx.table.row(
+        rx.table.cell(rx.text(e.created_at, size="1", white_space="nowrap")),
+        rx.table.cell(rx.badge(e.action, variant="soft")),
+        rx.table.cell(rx.text(e.target, size="1")),
+        rx.table.cell(rx.text(e.summary, size="1")),
+        rx.table.cell(
+            rx.cond(
+                e.reason != "",
+                rx.text(e.reason, size="1"),
+                rx.text("—", size="1", color_scheme="gray"),
+            )
+        ),
+        rx.table.cell(rx.text(e.actor, size="1", color_scheme="gray")),
+        align="center",
+    )
+
+
+def activity_tab() -> rx.Component:
+    return rx.card(
+        rx.vstack(
+            rx.hstack(
+                card_header(
+                    "scroll-text",
+                    "Activity log",
+                    "Every privileged action — deletions, wallet changes and "
+                    "password updates — with who, when and why.",
+                ),
+                rx.spacer(),
+                search_box(
+                    "Search activity…",
+                    AdminState.audit_search,
+                    AdminState.set_audit_search,
+                ),
+                width="100%",
+                align="start",
+                wrap="wrap",
+            ),
+            rx.hstack(
+                result_count(AdminState.audit_result_count, "entries"),
+                rx.spacer(),
+                width="100%",
+            ),
+            rx.cond(
+                AdminState.audit_result_count > 0,
+                rx.box(
+                    rx.table.root(
+                        rx.table.header(
+                            rx.table.row(
+                                rx.table.column_header_cell("When (UTC)"),
+                                rx.table.column_header_cell("Action"),
+                                rx.table.column_header_cell("Target"),
+                                rx.table.column_header_cell("Details"),
+                                rx.table.column_header_cell("Reason"),
+                                rx.table.column_header_cell("By"),
+                            )
+                        ),
+                        rx.table.body(
+                            rx.foreach(AdminState.filtered_audit, _audit_row)
+                        ),
+                        variant="surface",
+                        size="1",
+                        width="100%",
+                    ),
+                    overflow_x="auto",
+                    width="100%",
+                ),
+                rx.center(
+                    rx.vstack(
+                        rx.icon("scroll-text", size=22, opacity=0.4),
+                        rx.text(
+                            "No activity recorded yet.",
+                            size="1",
+                            color_scheme="gray",
+                        ),
+                        spacing="2",
+                        align="center",
+                    ),
+                    height="10em",
+                    width="100%",
+                ),
+            ),
+            spacing="4",
+            width="100%",
+        ),
+        size="3",
+        width="100%",
+    )
+
+
+# --------------------------------------------------------------------------- #
 # Settings tab — account security
 # --------------------------------------------------------------------------- #
 def _strength_meter() -> rx.Component:
@@ -2977,6 +3179,7 @@ def dashboard_view() -> rx.Component:
                             _tab_trigger("users", "Users", "users"),
                             _tab_trigger("smartphone", "SMS", "sms"),
                             _tab_trigger("megaphone", "Marketing", "marketing"),
+                            _tab_trigger("scroll-text", "Activity", "activity"),
                             _tab_trigger("settings", "Settings", "settings"),
                             size="2",
                         ),
@@ -3001,6 +3204,9 @@ def dashboard_view() -> rx.Component:
                     ),
                     rx.tabs.content(
                         marketing_tab(), value="marketing", padding_top="1.2em"
+                    ),
+                    rx.tabs.content(
+                        activity_tab(), value="activity", padding_top="1.2em"
                     ),
                     rx.tabs.content(
                         settings_tab(), value="settings", padding_top="1.2em"
