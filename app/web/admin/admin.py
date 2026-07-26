@@ -161,6 +161,13 @@ class AdminState(rx.State):
     users_message: str = ""
     user_adjust_amount: str = ""
 
+    # Per-user wallet dialog
+    wallet_user_id: int = 0
+    wallet_username: str = ""
+    wallet_balance: str = "0.00"
+    wallet_message: str = ""
+    wallet_ok: bool = False
+
     # Table search boxes
     product_search: str = ""
     order_search: str = ""
@@ -837,54 +844,107 @@ class AdminState(rx.State):
 
     def set_user_adjust_amount(self, value: str) -> None:
         self.user_adjust_amount = value
+        self.wallet_message = ""
 
-    async def credit_user_wallet(self, user_id: int) -> None:
+    async def open_wallet_dialog(self, user_id: int) -> None:
+        """Open the per-user wallet dialog with that user's live balance.
+
+        The amount used to live in one shared box at the top of the card
+        while the +/- buttons sat in each row, so it was easy to click
+        without an amount (nothing happened) or to adjust the wrong user.
+        Everything now happens in one dialog scoped to a single user.
+        """
         if not self.authed:
             return
+        self.touch()
+        row = next((u for u in self.users if u.id == user_id), None)
+        self.wallet_user_id = user_id
+        self.wallet_username = row.username if row else f"#{user_id}"
+        async with AsyncSessionLocal() as session:
+            balance = await services.get_user_balance(session, user_id)
+        self.wallet_balance = f"{balance:.2f}"
+        self.user_adjust_amount = ""
+        self.wallet_message = ""
+        self.wallet_ok = False
+
+    def close_wallet_dialog(self) -> None:
+        self.wallet_message = ""
+        self.user_adjust_amount = ""
+
+    def _wallet_amount(self) -> Decimal | None:
+        """Parse the entered amount, setting an error message if invalid."""
+        raw = (self.user_adjust_amount or "").strip()
+        if not raw:
+            self.wallet_ok = False
+            self.wallet_message = "Enter an amount first."
+            return None
         try:
-            amount = Decimal(self.user_adjust_amount or "0")
+            amount = Decimal(raw).quantize(Decimal("0.01"))
         except InvalidOperation:
-            self.users_message = "⚠ Invalid wallet amount."
-            return
+            self.wallet_ok = False
+            self.wallet_message = "That is not a valid amount."
+            return None
         if amount <= 0:
-            self.users_message = "⚠ Enter amount greater than 0."
+            self.wallet_ok = False
+            self.wallet_message = "Amount must be greater than 0."
+            return None
+        return amount
+
+    async def credit_user_wallet(self):
+        if not self.authed:
+            return
+        self.touch()
+        amount = self._wallet_amount()
+        if amount is None:
             return
 
+        user_id = self.wallet_user_id
         async with AsyncSessionLocal() as session:
             updated = await services.adjust_user_balance(session, user_id, amount)
-        self.users_message = (
-            f"✅ Credited ${amount:.2f} to user #{user_id}. "
-            f"Balance: ${updated:.2f}."
-        )
-        await self.load_all()
 
-    async def debit_user_wallet(self, user_id: int) -> None:
+        self.wallet_balance = f"{updated:.2f}"
+        self.wallet_ok = True
+        self.wallet_message = (
+            f"Credited ${amount:.2f}. New balance ${updated:.2f}."
+        )
+        self.user_adjust_amount = ""
+        await self.load_all()
+        return rx.toast.success(
+            f"Credited ${amount:.2f} to {self.wallet_username}"
+        )
+
+    async def debit_user_wallet(self):
         if not self.authed:
             return
-        try:
-            amount = Decimal(self.user_adjust_amount or "0")
-        except InvalidOperation:
-            self.users_message = "⚠ Invalid wallet amount."
-            return
-        if amount <= 0:
-            self.users_message = "⚠ Enter amount greater than 0."
+        self.touch()
+        amount = self._wallet_amount()
+        if amount is None:
             return
 
+        user_id = self.wallet_user_id
         try:
             async with AsyncSessionLocal() as session:
                 updated = await services.adjust_user_balance(
                     session, user_id, Decimal("0") - amount
                 )
-            self.users_message = (
-                f"✅ Debited ${amount:.2f} from user #{user_id}. "
-                f"Balance: ${updated:.2f}."
-            )
         except services.InsufficientBalanceError as exc:
-            self.users_message = (
-                f"⚠ Cannot debit user #{user_id}. "
-                f"Need ${exc.required:.2f}, have ${exc.balance:.2f}."
+            self.wallet_ok = False
+            self.wallet_message = (
+                f"Not enough balance — needs ${exc.required:.2f}, "
+                f"has ${exc.balance:.2f}."
             )
+            return
+
+        self.wallet_balance = f"{updated:.2f}"
+        self.wallet_ok = True
+        self.wallet_message = (
+            f"Debited ${amount:.2f}. New balance ${updated:.2f}."
+        )
+        self.user_adjust_amount = ""
         await self.load_all()
+        return rx.toast.success(
+            f"Debited ${amount:.2f} from {self.wallet_username}"
+        )
 
     # ----------------------------------------------------------------- #
     # Bulk inventory upload (one item per line)
@@ -1934,26 +1994,113 @@ def _user_row(u: UserRow) -> rx.Component:
                 ),
             )
         ),
-        rx.table.cell(
-            rx.hstack(
-                rx.button(
-                    rx.icon("plus", size=14),
-                    size="1",
-                    color_scheme="green",
-                    variant="soft",
-                    on_click=lambda: AdminState.credit_user_wallet(u.id),
-                ),
-                rx.button(
-                    rx.icon("minus", size=14),
-                    size="1",
-                    color_scheme="orange",
-                    variant="soft",
-                    on_click=lambda: AdminState.debit_user_wallet(u.id),
-                ),
-                spacing="1",
+        rx.table.cell(wallet_dialog(u)),
+        align="center",
+    )
+
+
+def wallet_dialog(u: UserRow) -> rx.Component:
+    """Credit/debit one user's wallet, scoped to that user.
+
+    Uses Radix's own trigger rather than a state-controlled ``open`` prop —
+    the dialog opens on click without a server round-trip, and the handler
+    only loads that user's current balance into the form.
+    """
+    return rx.dialog.root(
+        rx.dialog.trigger(
+            rx.button(
+                rx.icon("wallet", size=14),
+                "Adjust",
+                size="1",
+                variant="soft",
+                on_click=lambda: AdminState.open_wallet_dialog(u.id),
             )
         ),
-        align="center",
+        rx.dialog.content(
+            rx.dialog.title("Adjust wallet"),
+            rx.dialog.description(
+                rx.hstack(
+                    rx.text(AdminState.wallet_username, weight="bold"),
+                    rx.text("·", color_scheme="gray"),
+                    rx.text(f"user #{AdminState.wallet_user_id}", size="2",
+                            color_scheme="gray"),
+                    spacing="2",
+                    align="center",
+                ),
+                size="2",
+            ),
+            rx.vstack(
+                rx.hstack(
+                    rx.text("Current balance", size="2", color_scheme="gray"),
+                    rx.spacer(),
+                    rx.heading(f"${AdminState.wallet_balance}", size="5"),
+                    width="100%",
+                    align="center",
+                ),
+                rx.divider(),
+                rx.vstack(
+                    rx.text("Amount (USD)", size="1", weight="medium"),
+                    rx.input(
+                        placeholder="e.g. 5.00",
+                        type="number",
+                        value=AdminState.user_adjust_amount,
+                        on_change=AdminState.set_user_adjust_amount,
+                        width="100%",
+                        size="3",
+                        auto_focus=True,
+                    ),
+                    spacing="1",
+                    width="100%",
+                ),
+                rx.cond(
+                    AdminState.wallet_message != "",
+                    rx.callout(
+                        AdminState.wallet_message,
+                        icon=rx.cond(
+                            AdminState.wallet_ok,
+                            "circle-check",
+                            "triangle-alert",
+                        ),
+                        color_scheme=rx.cond(
+                            AdminState.wallet_ok, "green", "red"
+                        ),
+                        size="1",
+                        width="100%",
+                    ),
+                ),
+                rx.hstack(
+                    rx.button(
+                        rx.icon("plus", size=15),
+                        "Credit",
+                        color_scheme="green",
+                        on_click=AdminState.credit_user_wallet,
+                        flex="1",
+                    ),
+                    rx.button(
+                        rx.icon("minus", size=15),
+                        "Debit",
+                        color_scheme="orange",
+                        on_click=AdminState.debit_user_wallet,
+                        flex="1",
+                    ),
+                    spacing="2",
+                    width="100%",
+                ),
+                rx.dialog.close(
+                    rx.button(
+                        "Done",
+                        variant="soft",
+                        color_scheme="gray",
+                        width="100%",
+                        on_click=AdminState.close_wallet_dialog,
+                    )
+                ),
+                spacing="3",
+                width="100%",
+                margin_top="1em",
+            ),
+            max_width="24em",
+        ),
     )
 
 
@@ -1964,8 +2111,8 @@ def users_tab() -> rx.Component:
                 card_header(
                     "users",
                     "Users",
-                    "Toggle Active to suspend; +/- adjusts wallet by the "
-                    "amount below.",
+                    "Toggle Active to suspend. Use Adjust to credit or "
+                    "debit a user's wallet.",
                 ),
                 rx.spacer(),
                 search_box(
@@ -1976,18 +2123,6 @@ def users_tab() -> rx.Component:
                 width="100%",
                 align="start",
                 wrap="wrap",
-            ),
-            rx.hstack(
-                rx.text("Wallet adjust amount (USD):", size="2"),
-                rx.input(
-                    placeholder="e.g. 5.00",
-                    type="number",
-                    value=AdminState.user_adjust_amount,
-                    on_change=AdminState.set_user_adjust_amount,
-                    width="9em",
-                ),
-                spacing="2",
-                align="center",
             ),
             section_message(AdminState.users_message),
             rx.box(
@@ -2012,7 +2147,7 @@ def users_tab() -> rx.Component:
                             rx.table.column_header_cell("Status"),
                             rx.table.column_header_cell("Active"),
                             rx.table.column_header_cell("Block"),
-                            rx.table.column_header_cell("Wallet +/-"),
+                            rx.table.column_header_cell("Adjust wallet"),
                         )
                     ),
                     rx.table.body(

@@ -28,10 +28,13 @@
           <div class="input-prefixed">
             <span class="prefix" aria-hidden="true">$</span>
             <input class="input" id="amount" name="amount" type="number"
-                   min="0.10" max="500" step="0.01" placeholder="1.00" required
+                   min="{{ min_topup }}" max="{{ max_topup }}" step="0.01"
+                   placeholder="{{ min_topup }}.00" required
                    inputmode="decimal" aria-describedby="amount-hint">
           </div>
-          <p class="field-hint" id="amount-hint">Minimum $0.10 &middot; maximum $500.00</p>
+          <p class="field-hint" id="amount-hint">
+            Minimum ${{ min_topup }}.00 &middot; maximum ${{ max_topup }}.00
+          </p>
           <p class="field-error" id="amount-error" hidden>
             <svg class="ic ic-sm" aria-hidden="true"><use href="#i-alert"/></svg>
             <span></span>
@@ -39,12 +42,12 @@
         </div>
 
         <div class="row" style="gap:var(--sp-2)">
-          {% for preset in [1, 5, 10, 20] %}
+          {% for preset in presets %}
             <button type="button" class="pill" data-amount="{{ preset }}">${{ preset }}.00</button>
           {% endfor %}
         </div>
 
-        <button type="submit" class="btn btn-primary btn-lg btn-block">
+        <button type="submit" class="btn btn-primary btn-lg btn-block" id="topup-submit">
           <svg class="ic" aria-hidden="true"><use href="#i-qr"/></svg>
           Top up with KHQR
         </button>
@@ -79,8 +82,14 @@
 {% block scripts %}
 <script>
   (function () {
+    // Limits come from the server so this can never disagree with the
+    // backend check in payment_service.topup_amount_error().
+    var MIN = {{ min_topup }};
+    var MAX = {{ max_topup }};
+
     var form = document.getElementById("topup-form");
     var input = document.getElementById("amount");
+    var submit = document.getElementById("topup-submit");
     var err = document.getElementById("amount-error");
     var errText = err.querySelector("span");
 
@@ -92,29 +101,42 @@
       });
     });
 
-    function validate() {
+    function problem() {
+      if (input.value.trim() === "") return "Enter an amount.";
       var v = parseFloat(input.value);
-      var message = "";
-      if (input.value === "") message = "";
-      else if (isNaN(v)) message = "Enter a valid amount.";
-      else if (v < 0.1) message = "The minimum top-up is $0.10.";
-      else if (v > 500) message = "The maximum top-up is $500.00.";
+      if (isNaN(v)) return "Enter a valid amount.";
+      if (v < MIN) return "Minimum top-up amount is $" + MIN + ".";
+      if (v > MAX) return "Maximum top-up amount is $" + MAX + ".";
+      return "";
+    }
 
-      var invalid = message !== "";
+    function validate(showEmpty) {
+      var message = problem();
+      // Don't shout at an untouched empty field.
+      var invalid = message !== "" &&
+        (showEmpty || input.value.trim() !== "");
+
       err.hidden = !invalid;
       input.setAttribute("aria-invalid", invalid ? "true" : "false");
       if (invalid) errText.textContent = message;
-      return !invalid && input.value !== "";
+
+      // Keep the button visibly unavailable until the amount is valid.
+      submit.setAttribute("aria-disabled", message === "" ? "false" : "true");
+      return message === "";
     }
 
-    input.addEventListener("input", validate);
-    input.addEventListener("blur", validate);
+    input.addEventListener("input", function () { validate(false); });
+    input.addEventListener("blur", function () { validate(false); });
+    validate(false);
 
     form.addEventListener("submit", function (e) {
-      if (!validate()) { e.preventDefault(); input.focus(); return; }
-      var btn = form.querySelector('button[type="submit"]');
-      btn.setAttribute("aria-disabled", "true");
-      btn.innerHTML = '<span class="spinner"></span> Generating QR…';
+      if (!validate(true)) {
+        e.preventDefault();
+        input.focus();
+        return;
+      }
+      submit.setAttribute("aria-disabled", "true");
+      submit.innerHTML = '<span class="spinner"></span> Generating QR…';
     });
   })();
 </script>

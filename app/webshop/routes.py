@@ -328,7 +328,7 @@ async def my_orders(request: Request):
 # Wallet top-up (KHQR) — needed to fund SMS activations on the web
 # --------------------------------------------------------------------------- #
 from decimal import Decimal, InvalidOperation
-from urllib.parse import quote
+from urllib.parse import quote, quote_plus
 
 from shared.models import TopupStatus
 from shared import sms_service
@@ -351,12 +351,18 @@ async def wallet_page(request: Request):
         return RedirectResponse("/")
     async with AsyncSessionLocal() as session:
         balance = await services.get_user_balance(session, user.id)
+    min_topup = int(payment_service.MIN_TOPUP)
     return await _render(
         request,
         "wallet.html",
         balance=f"{balance:.2f}",
         error=request.query_params.get("error", ""),
         success=request.query_params.get("success", ""),
+        # Limits are rendered from the service constants so the form and
+        # the server check can never disagree.
+        min_topup=min_topup,
+        max_topup=int(payment_service.MAX_TOPUP),
+        presets=[p for p in (2, 5, 10, 20) if p >= min_topup],
     )
 
 
@@ -371,18 +377,27 @@ async def wallet_topup(request: Request, amount: str = Form(...)):
         )
     except (InvalidOperation, ValueError):
         return RedirectResponse(
-            "/wallet?error=Enter+a+valid+amount", status_code=303
-        )
-    if value < Decimal("0.10") or value > Decimal("500"):
-        return RedirectResponse(
-            "/wallet?error=Amount+must+be+between+%240.10+and+%24500",
+            "/wallet?error=" + quote_plus("Enter a valid amount."),
             status_code=303,
         )
 
-    async with AsyncSessionLocal() as session:
-        topup = await payment_service.create_wallet_topup_session(
-            session, user.id, value
+    # Server-side limit check — the browser form is a convenience, this is
+    # what actually holds if the POST is crafted by hand.
+    reason = payment_service.topup_amount_error(value)
+    if reason is not None:
+        return RedirectResponse(
+            "/wallet?error=" + quote_plus(reason), status_code=303
         )
+
+    async with AsyncSessionLocal() as session:
+        try:
+            topup = await payment_service.create_wallet_topup_session(
+                session, user.id, value
+            )
+        except payment_service.PaymentError as exc:
+            return RedirectResponse(
+                "/wallet?error=" + quote_plus(str(exc)), status_code=303
+            )
     task = asyncio.create_task(
         payment_service.poll_wallet_topup_until_paid(topup.id)
     )

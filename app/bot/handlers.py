@@ -511,7 +511,11 @@ async def btn_topup(message: Message, state: FSMContext) -> None:
             )
             return
     await state.set_state(PurchaseState.waiting_for_topup_amount)
-    await message.answer("Enter top-up amount in USD (example: 10 or 15.50)")
+    await message.answer(
+        "Enter top-up amount in USD (example: 10 or 15.50)\n"
+        f"Minimum ${payment_service.MIN_TOPUP:.0f} · "
+        f"maximum ${payment_service.MAX_TOPUP:.0f}"
+    )
 
 
 @router.message(PurchaseState.waiting_for_topup_amount)
@@ -527,8 +531,10 @@ async def msg_topup_amount(message: Message, state: FSMContext) -> None:
         await message.answer("Please enter a valid amount, e.g. 10 or 15.50")
         return
 
-    if amount <= 0:
-        await message.answer("Amount must be greater than 0")
+    # Same limits as the website — shared so the two cannot drift apart.
+    reason = payment_service.topup_amount_error(amount)
+    if reason is not None:
+        await message.answer(f"{reason} Please enter another amount.")
         return
 
     async with AsyncSessionLocal() as session:
@@ -543,6 +549,10 @@ async def msg_topup_amount(message: Message, state: FSMContext) -> None:
             await message.answer(
                 "🚫 Your account has been permanently blocked. Contact support."
             )
+            await state.clear()
+            return
+        except payment_service.PaymentError as exc:
+            await message.answer(str(exc))
             await state.clear()
             return
 

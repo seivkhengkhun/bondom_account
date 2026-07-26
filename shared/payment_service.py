@@ -58,6 +58,26 @@ QR_LIFETIME = timedelta(seconds=900)  # 15 minutes
 VERIFY_TIMEOUT_SECONDS = 15
 POLL_INTERVAL_SECONDS = 10
 
+# Wallet top-up limits — the single source of truth. Every entry point
+# (website form, Telegram bot) imports these rather than hardcoding its
+# own numbers, and ``create_wallet_topup_session`` enforces them again at
+# the bottom so no caller can bypass the check.
+MIN_TOPUP = Decimal("2.00")
+MAX_TOPUP = Decimal("500.00")
+
+
+def topup_amount_error(amount: Decimal) -> str | None:
+    """Return a user-facing reason ``amount`` is not a valid top-up.
+
+    ``None`` means the amount is acceptable. Shared by every caller so the
+    wording stays identical on the website and in the bot.
+    """
+    if amount < MIN_TOPUP:
+        return f"Minimum top-up amount is ${MIN_TOPUP:.0f}."
+    if amount > MAX_TOPUP:
+        return f"Maximum top-up amount is ${MAX_TOPUP:.0f}."
+    return None
+
 
 def _configure_tls_ca_bundle() -> None:
     """Force stdlib HTTPS clients to trust certifi CA bundle.
@@ -386,9 +406,15 @@ async def poll_payment_until_paid(
 async def create_wallet_topup_session(
     session: AsyncSession, user_id: int, amount: Decimal
 ) -> WalletTopup:
-    """Create KHQR payment session to top up user wallet balance."""
-    if amount <= 0:
-        raise PaymentError("Top-up amount must be greater than 0")
+    """Create KHQR payment session to top up user wallet balance.
+
+    Limits are enforced here, not only in the UI: this is the one path
+    every caller goes through, so a crafted POST or a bot message cannot
+    get around the minimum.
+    """
+    reason = topup_amount_error(amount)
+    if reason is not None:
+        raise PaymentError(reason)
 
     async with transaction_scope(session):
         user = await session.get(User, user_id)
