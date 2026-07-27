@@ -48,6 +48,7 @@ from shared.services import (
     UserPermanentlyBlockedError,
     add_user_balance,
     cancel_order_and_release_inventory,
+    has_topup_override,
     is_user_blocked,
     transaction_scope,
 )
@@ -65,15 +66,30 @@ POLL_INTERVAL_SECONDS = 10
 MIN_TOPUP = Decimal("2.00")
 MAX_TOPUP = Decimal("500.00")
 
+# Floor for users an admin has exempted from the normal minimum. Still a
+# positive amount — KHQR cannot represent a zero-value payment, and a
+# free top-up would just be an admin balance credit.
+OVERRIDE_MIN_TOPUP = Decimal("0.01")
 
-def topup_amount_error(amount: Decimal) -> str | None:
+
+def effective_min_topup(override: bool = False) -> Decimal:
+    return OVERRIDE_MIN_TOPUP if override else MIN_TOPUP
+
+
+def topup_amount_error(amount: Decimal, override: bool = False) -> str | None:
     """Return a user-facing reason ``amount`` is not a valid top-up.
 
     ``None`` means the amount is acceptable. Shared by every caller so the
     wording stays identical on the website and in the bot.
+
+    ``override`` is the per-user admin exemption: it lowers the minimum,
+    it does not remove it, and it never affects the maximum.
     """
-    if amount < MIN_TOPUP:
-        return f"Minimum top-up amount is ${MIN_TOPUP:.0f}."
+    minimum = effective_min_topup(override)
+    if amount < minimum:
+        if override:
+            return f"Minimum top-up amount is ${minimum:.2f}."
+        return f"Minimum top-up amount is ${minimum:.0f}."
     if amount > MAX_TOPUP:
         return f"Maximum top-up amount is ${MAX_TOPUP:.0f}."
     return None
@@ -542,7 +558,8 @@ async def create_wallet_topup_session(
     every caller goes through, so a crafted POST or a bot message cannot
     get around the minimum.
     """
-    reason = topup_amount_error(amount)
+    override = await has_topup_override(session, user_id)
+    reason = topup_amount_error(amount, override=override)
     if reason is not None:
         raise PaymentError(reason)
 

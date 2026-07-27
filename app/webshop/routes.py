@@ -368,16 +368,24 @@ async def wallet_page(request: Request):
         return RedirectResponse("/")
     async with AsyncSessionLocal() as session:
         balance = await services.get_user_balance(session, user.id)
-    min_topup = int(payment_service.MIN_TOPUP)
+    async with AsyncSessionLocal() as session:
+        override = await services.has_topup_override(session, user.id)
+    min_topup = payment_service.effective_min_topup(override)
+    # Whole dollars normally, cents when an admin has lowered the floor.
+    min_topup_label = (
+        f"{min_topup:.2f}" if override else f"{int(min_topup)}"
+    )
     return await _render(
         request,
         "wallet.html",
         balance=f"{balance:.2f}",
+        topup_override=override,
+        min_topup_label=min_topup_label,
         error=request.query_params.get("error", ""),
         success=request.query_params.get("success", ""),
         # Limits are rendered from the service constants so the form and
         # the server check can never disagree.
-        min_topup=min_topup,
+        min_topup=f"{min_topup:.2f}",
         max_topup=int(payment_service.MAX_TOPUP),
         presets=[p for p in (2, 5, 10, 20) if p >= min_topup],
     )
@@ -407,7 +415,9 @@ async def wallet_topup(
 
     # Server-side limit check — the browser form is a convenience, this is
     # what actually holds if the POST is crafted by hand.
-    reason = payment_service.topup_amount_error(value)
+    async with AsyncSessionLocal() as session:
+        override = await services.has_topup_override(session, user.id)
+    reason = payment_service.topup_amount_error(value, override=override)
     if reason is not None:
         return RedirectResponse(
             "/wallet?error=" + quote_plus(reason), status_code=303

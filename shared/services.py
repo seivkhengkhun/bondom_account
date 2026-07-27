@@ -289,6 +289,64 @@ async def get_user_delete_impact(
     )
 
 
+USER_TOPUP_OVERRIDE_KEY_PREFIX = "topup_override:"
+
+
+def _topup_override_key(user_id: int) -> str:
+    return f"{USER_TOPUP_OVERRIDE_KEY_PREFIX}{user_id}"
+
+
+async def has_topup_override(session: AsyncSession, user_id: int) -> bool:
+    """True when this user may top up below the normal minimum.
+
+    Off for everyone unless an admin turns it on, and stored as its own
+    marker row rather than a column so no migration is needed.
+    """
+    async with transaction_scope(session):
+        row = await session.get(AppSetting, _topup_override_key(user_id))
+        return row is not None
+
+
+async def list_topup_override_user_ids(session: AsyncSession) -> set[int]:
+    async with transaction_scope(session):
+        keys = (
+            await session.scalars(
+                select(AppSetting.key).where(
+                    AppSetting.key.like(f"{USER_TOPUP_OVERRIDE_KEY_PREFIX}%")
+                )
+            )
+        ).all()
+    out: set[int] = set()
+    for key in keys:
+        try:
+            out.add(int(str(key).removeprefix(USER_TOPUP_OVERRIDE_KEY_PREFIX)))
+        except ValueError:
+            continue
+    return out
+
+
+async def set_topup_override(
+    session: AsyncSession, user_id: int, enabled: bool, note: str = ""
+) -> bool:
+    """Grant or revoke the reduced-minimum exemption for one user."""
+    async with transaction_scope(session):
+        user = await session.get(User, user_id)
+        if user is None:
+            raise UserNotFoundError(user_id)
+
+        key = _topup_override_key(user_id)
+        row = await session.get(AppSetting, key)
+        if enabled:
+            value = note.strip()[:500] or "enabled"
+            if row is None:
+                session.add(AppSetting(key=key, value=value))
+            else:
+                row.value = value
+        elif row is not None:
+            await session.delete(row)
+    return enabled
+
+
 USER_DELETED_KEY_PREFIX = "user_deleted:"
 
 

@@ -337,3 +337,76 @@ async def test_audit_never_raises_on_failure(monkeypatch):
     monkeypatch.setattr(audit, "AsyncSessionLocal", Boom())
     # Must swallow the error rather than propagate it.
     await audit.log_action(audit.ACTION_USER_DELETE, summary="x")
+
+
+# --------------------------------------------------------------------------- #
+# Admin override of the top-up minimum
+# --------------------------------------------------------------------------- #
+@pytest.mark.asyncio
+async def test_topup_override_is_off_by_default(db):
+    user = await _user(db)
+    async with db() as s:
+        assert await services.has_topup_override(s, user.id) is False
+
+
+@pytest.mark.asyncio
+async def test_topup_override_can_be_granted_and_revoked(db):
+    user = await _user(db)
+    async with db() as s:
+        await services.set_topup_override(s, user.id, True, note="testing")
+    async with db() as s:
+        assert await services.has_topup_override(s, user.id) is True
+        assert user.id in await services.list_topup_override_user_ids(s)
+
+    async with db() as s:
+        await services.set_topup_override(s, user.id, False)
+    async with db() as s:
+        assert await services.has_topup_override(s, user.id) is False
+        assert user.id not in await services.list_topup_override_user_ids(s)
+
+
+@pytest.mark.asyncio
+async def test_override_is_per_user_only(db):
+    """Granting it to one user must not affect anybody else."""
+    a = await _user(db, 111, "granted")
+    b = await _user(db, 222, "normal")
+    async with db() as s:
+        await services.set_topup_override(s, a.id, True)
+    async with db() as s:
+        assert await services.has_topup_override(s, a.id) is True
+        assert await services.has_topup_override(s, b.id) is False
+
+
+@pytest.mark.asyncio
+async def test_override_on_missing_user_raises(db):
+    async with db() as s:
+        with pytest.raises(services.UserNotFoundError):
+            await services.set_topup_override(s, 999999, True)
+
+
+@pytest.mark.parametrize(
+    "amount,override,accepted",
+    [
+        ("1.00", False, False),   # normal user, below $2
+        ("1.00", True, True),     # exempted user, allowed
+        ("0.01", True, True),     # exempted user, at the floor
+        ("0.00", True, False),    # zero is never a payment
+        ("-1.00", True, False),   # negative is never a payment
+        ("2.00", False, True),
+        ("500.01", True, False),  # the maximum still applies
+    ],
+)
+def test_override_lowers_the_minimum_but_not_the_maximum(
+    amount, override, accepted
+):
+    err = topup_amount_error(Decimal(amount), override=override)
+    assert (err is None) is accepted
+
+
+def test_effective_minimum_values():
+    from shared.payment_service import OVERRIDE_MIN_TOPUP, effective_min_topup
+
+    assert effective_min_topup(False) == MIN_TOPUP
+    assert effective_min_topup(True) == OVERRIDE_MIN_TOPUP
+    # The override lowers the floor, it does not remove it.
+    assert OVERRIDE_MIN_TOPUP > 0

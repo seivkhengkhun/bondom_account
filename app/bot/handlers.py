@@ -511,10 +511,20 @@ async def btn_topup(message: Message, state: FSMContext) -> None:
             )
             return
     await state.set_state(PurchaseState.waiting_for_topup_amount)
+
+    # Show this user's own floor — an admin may have lowered it for them.
+    async with AsyncSessionLocal() as session:
+        prompt_user = await services.get_or_create_user(
+            session, message.from_user.id, message.from_user.username
+        )
+        override = await services.has_topup_override(session, prompt_user.id)
+    minimum = payment_service.effective_min_topup(override)
+
     await message.answer(
         "Enter top-up amount in USD (example: 10 or 15.50)\n"
-        f"Minimum ${payment_service.MIN_TOPUP:.0f} · "
+        f"Minimum ${minimum:.2f} · "
         f"maximum ${payment_service.MAX_TOPUP:.0f}"
+        + ("\n(An admin has lowered the minimum on your account.)" if override else "")
     )
 
 
@@ -531,16 +541,19 @@ async def msg_topup_amount(message: Message, state: FSMContext) -> None:
         await message.answer("Please enter a valid amount, e.g. 10 or 15.50")
         return
 
+    async with AsyncSessionLocal() as session:
+        user = await services.get_or_create_user(
+            session, message.from_user.id, message.from_user.username
+        )
+        override = await services.has_topup_override(session, user.id)
+
     # Same limits as the website — shared so the two cannot drift apart.
-    reason = payment_service.topup_amount_error(amount)
+    reason = payment_service.topup_amount_error(amount, override=override)
     if reason is not None:
         await message.answer(f"{reason} Please enter another amount.")
         return
 
     async with AsyncSessionLocal() as session:
-        user = await services.get_or_create_user(
-            session, message.from_user.id, message.from_user.username
-        )
         try:
             topup = await payment_service.create_wallet_topup_session(
                 session, user.id, amount

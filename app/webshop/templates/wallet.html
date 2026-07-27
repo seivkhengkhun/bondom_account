@@ -30,12 +30,18 @@
             <span class="prefix" aria-hidden="true">$</span>
             <input class="input" id="amount" name="amount" type="number"
                    min="{{ min_topup }}" max="{{ max_topup }}" step="0.01"
-                   placeholder="{{ min_topup }}.00" required
+                   placeholder="{{ min_topup }}" required
                    inputmode="decimal" aria-describedby="amount-hint">
           </div>
           <p class="field-hint" id="amount-hint">
-            Minimum ${{ min_topup }}.00 &middot; maximum ${{ max_topup }}.00
+            Minimum ${{ min_topup_label }} &middot; maximum ${{ max_topup }}.00
           </p>
+          {% if topup_override %}
+            <p class="field-hint" style="color:var(--accent-text)">
+              <svg class="ic ic-sm" aria-hidden="true" style="vertical-align:-0.15em"><use href="#i-info"/></svg>
+              An administrator has lowered the minimum on your account.
+            </p>
+          {% endif %}
           <p class="field-error" id="amount-error" hidden>
             <svg class="ic ic-sm" aria-hidden="true"><use href="#i-alert"/></svg>
             <span></span>
@@ -106,7 +112,7 @@
       if (input.value.trim() === "") return "Enter an amount.";
       var v = parseFloat(input.value);
       if (isNaN(v)) return "Enter a valid amount.";
-      if (v < MIN) return "Minimum top-up amount is $" + MIN + ".";
+      if (v < MIN) return "Minimum top-up amount is ${{ min_topup_label }}.";
       if (v > MAX) return "Maximum top-up amount is $" + MAX + ".";
       return "";
     }

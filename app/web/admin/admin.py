@@ -29,7 +29,7 @@ if str(PROJECT_ROOT) not in sys.path:
 import reflex as rx
 from aiogram import Bot
 
-from shared import admin_auth, audit, services
+from shared import admin_auth, audit, payment_service, services
 from shared.config import settings
 from shared.database import AsyncSessionLocal
 from shared.schemas import ProductCreate
@@ -75,6 +75,7 @@ class UserRow:
     is_active: bool
     is_blocked: bool
     balance: str
+    topup_override: bool = False
 
 
 @dataclasses.dataclass
@@ -178,6 +179,7 @@ class AdminState(rx.State):
     wallet_balance: str = "0.00"
     wallet_message: str = ""
     wallet_ok: bool = False
+    wallet_override: bool = False
 
     # Delete-user dialog
     del_user_id: int = 0
@@ -621,6 +623,9 @@ class AdminState(rx.State):
             orders = await services.list_orders(session, limit=100)
             users = await services.list_users(session, limit=200)
             blocked_user_ids = await services.list_blocked_user_ids(session)
+            override_user_ids = await services.list_topup_override_user_ids(
+                session
+            )
             self.bot_show_stock = await services.get_bot_show_stock(session)
             entries = await audit.list_entries(session, limit=400)
         self.audit_rows = [
@@ -721,6 +726,7 @@ class AdminState(rx.State):
                 is_active=u.is_active,
                 is_blocked=u.id in blocked_user_ids,
                 balance="0.00",
+                topup_override=u.id in override_user_ids,
             )
             for u in users
         ]
@@ -931,6 +937,9 @@ class AdminState(rx.State):
         self.wallet_username = row.username if row else f"#{user_id}"
         async with AsyncSessionLocal() as session:
             balance = await services.get_user_balance(session, user_id)
+            self.wallet_override = await services.has_topup_override(
+                session, user_id
+            )
         self.wallet_balance = f"{balance:.2f}"
         self.user_adjust_amount = ""
         self.wallet_message = ""
@@ -939,6 +948,42 @@ class AdminState(rx.State):
     def close_wallet_dialog(self) -> None:
         self.wallet_message = ""
         self.user_adjust_amount = ""
+
+    async def toggle_topup_override(self, enabled: bool):
+        """Let one user top up below the normal minimum, or revoke it.
+
+        Admin-only: like every mutating handler here it re-checks ``authed``
+        server-side, so the toggle cannot be driven by a crafted event.
+        """
+        if not self.authed:
+            return
+        self.touch()
+        user_id = self.wallet_user_id
+        username = self.wallet_username
+
+        async with AsyncSessionLocal() as session:
+            await services.set_topup_override(session, user_id, enabled)
+
+        self.wallet_override = enabled
+        floor = payment_service.effective_min_topup(enabled)
+        self.wallet_ok = True
+        self.wallet_message = (
+            f"Minimum top-up for {username} is now ${floor:.2f}."
+        )
+        await audit.log_action(
+            audit.ACTION_TOPUP_OVERRIDE,
+            target_type="user",
+            target_id=user_id,
+            summary=(
+                f"{'Enabled' if enabled else 'Disabled'} minimum top-up "
+                f"override for {username}; floor now ${floor:.2f}"
+            ),
+        )
+        await self.load_all()
+        return rx.toast.success(
+            f"Top-up override {'enabled' if enabled else 'disabled'} "
+            f"for {username}"
+        )
 
     # ------------------------------------------------------------- #
     # Delete user
@@ -2168,7 +2213,22 @@ def _user_row(u: UserRow) -> rx.Component:
         rx.table.cell(rx.text(u.id, color_scheme="gray")),
         rx.table.cell(u.telegram_id),
         rx.table.cell(rx.text(u.username, weight="medium")),
-        rx.table.cell("$" + u.balance),
+        rx.table.cell(
+            rx.hstack(
+                rx.text("$" + u.balance),
+                # Visible at a glance so an exempted account is never a
+                # surprise when reconciling small top-ups.
+                rx.cond(
+                    u.topup_override,
+                    rx.tooltip(
+                        rx.badge("min $0.01", color_scheme="amber", variant="soft"),
+                        content="Minimum top-up override is enabled",
+                    ),
+                ),
+                spacing="2",
+                align="center",
+            )
+        ),
         rx.table.cell(
             rx.badge(
                 rx.cond(u.is_blocked, "Blocked", "Allowed"),
@@ -2436,6 +2496,34 @@ def wallet_dialog(u: UserRow) -> rx.Component:
                     rx.text("Current balance", size="2", color_scheme="gray"),
                     rx.spacer(),
                     rx.heading(f"${AdminState.wallet_balance}", size="5"),
+                    width="100%",
+                    align="center",
+                ),
+                rx.divider(),
+                # Per-user exemption from the normal $2 minimum. Off by
+                # default; only reachable from this admin dialog.
+                rx.hstack(
+                    rx.vstack(
+                        rx.text(
+                            "Minimum top-up override", size="2", weight="medium"
+                        ),
+                        rx.text(
+                            rx.cond(
+                                AdminState.wallet_override,
+                                "Enabled — this user may top up from $0.01",
+                                "Disabled — the standard $2 minimum applies",
+                            ),
+                            size="1",
+                            color_scheme="gray",
+                        ),
+                        spacing="0",
+                        align="start",
+                    ),
+                    rx.spacer(),
+                    rx.switch(
+                        checked=AdminState.wallet_override,
+                        on_change=AdminState.toggle_topup_override,
+                    ),
                     width="100%",
                     align="center",
                 ),
