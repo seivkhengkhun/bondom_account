@@ -965,18 +965,6 @@ main.container {
 }
 .steps li.is-cancel .step-dot { border-color: var(--danger); color: var(--danger); }
 
-/* --- QR --- */
-.qr-frame {
-  background: #fff;
-  border-radius: var(--r-lg);
-  padding: var(--sp-3);
-  width: fit-content;
-  margin-inline: auto;
-  box-shadow: var(--shadow-md);
-  animation: pop-in var(--dur-4) var(--ease-out);
-}
-.qr-frame img { width: min(272px, 62vw); height: auto; }
-
 /* --- credential rows --- */
 .cred-list { display: grid; gap: var(--sp-2); }
 .cred-row {
