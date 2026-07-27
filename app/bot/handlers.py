@@ -569,7 +569,12 @@ async def msg_topup_amount(message: Message, state: FSMContext) -> None:
         ]
     )
     photo = BufferedInputFile(
-        payment_service.render_qr_png(topup.qr_string),
+        payment_service.render_khqr_card_png(
+            topup.qr_string,
+            f"{topup.amount:.2f}",
+            settings.merchant_name,
+            reference="Wallet top-up",
+        ),
         filename=f"topup_{topup.id}.png",
     )
     await message.answer_photo(
@@ -1133,7 +1138,12 @@ async def msg_buy_quantity(message: Message, state: FSMContext) -> None:
         ),
         f"order-payment:{order.id}:{payment.id}",
     )
-    qr_png = payment_service.render_qr_png(payment.qr_string)
+    qr_png = payment_service.render_khqr_card_png(
+        payment.qr_string,
+        f"{order.total_price:.2f}",
+        settings.merchant_name,
+        reference=f"Order #{order.id}",
+    )
     photo = BufferedInputFile(qr_png, filename=f"khqr_order_{order.id}.png")
     await message.answer_photo(
         photo=photo,

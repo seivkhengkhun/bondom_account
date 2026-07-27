@@ -78,6 +78,7 @@ async def _render(request: Request, template: str, **context) -> HTMLResponse:
     context.setdefault("auth_url", _auth_url(request))
     context.setdefault("sms_enabled", settings.sms_enabled)
     context.setdefault("csrf_token", csrf_token(_current_session(request)))
+    context.setdefault("merchant", settings.merchant_name)
     return templates.TemplateResponse(
         request=request, name=template, context=context
     )

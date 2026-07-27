@@ -1672,3 +1672,133 @@ pre.sdk-sample,
   max-width: 100%;
 }
 .cred-row code, .legal-body code { overflow-wrap: anywhere; }
+
+/* ------------------------------------------------------------ KHQR card */
+/* The card is intentionally light-only: it mimics a printed bank artefact
+   and must look identical in both themes, so it does not follow the
+   surface tokens. */
+.khqr {
+  --khqr-red: #e21c23;
+  width: min(20rem, 100%);
+  margin-inline: auto;
+  background: #fff;
+  border-radius: var(--r-lg);
+  overflow: hidden;
+  box-shadow: var(--shadow-lg);
+  color: #16181d;
+  text-align: center;
+  animation: pop-in var(--dur-4) var(--ease-out);
+}
+
+.khqr-head {
+  background: var(--khqr-red);
+  padding: 0.85rem 1.25rem 1.5rem;
+  /* The angled cut is the KHQR card's most recognisable detail. */
+  clip-path: polygon(0 0, 100% 0, 100% 62%, 0 100%);
+  display: flex;
+  justify-content: flex-start;
+}
+.khqr-logo {
+  color: #fff;
+  font-weight: 800;
+  font-size: 1.1rem;
+  letter-spacing: 0.02em;
+  line-height: 1;
+}
+
+.khqr-meta { padding: 0 1.25rem; margin-top: -0.35rem; }
+.khqr-merchant {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #16181d;
+  overflow-wrap: anywhere;
+}
+.khqr-amount {
+  font-size: 1.85rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  margin-top: 0.15rem;
+  color: #16181d;
+}
+.khqr-currency {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #6b7383;
+  margin-left: 0.35rem;
+}
+.khqr-reference {
+  font-size: 0.75rem;
+  color: #6b7383;
+  margin-top: 0.15rem;
+}
+
+/* Dashed rule, the way a payment slip is perforated. */
+.khqr-divider {
+  height: 1px;
+  margin: 1rem 1.25rem 0;
+  background-image: linear-gradient(90deg, #c9ced8 55%, transparent 0);
+  background-size: 8px 1px;
+  background-repeat: repeat-x;
+}
+
+.khqr-qr {
+  position: relative;
+  display: inline-block;
+  padding: 1rem 0 0.4rem;
+  line-height: 0;
+}
+.khqr-qr img {
+  width: min(240px, 58vw);
+  height: auto;
+  display: block;
+}
+
+/* Bakong mark over the centre of the symbol. Kept small — the QR is
+   level H, but the less it covers the better. */
+.khqr-mark {
+  position: absolute;
+  top: calc(50% + 0.3rem);
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 17%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: #fff;
+  display: grid;
+  place-items: center;
+  box-shadow: 0 0 0 3px #fff;
+}
+.khqr-mark-inner {
+  width: 82%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: var(--khqr-red);
+  display: grid;
+  place-items: center;
+}
+/* Small white centre dot rather than a ៛ glyph — Khmer font coverage is
+   not guaranteed on every device and a missing glyph renders as tofu. */
+.khqr-mark-inner::after {
+  content: "";
+  width: 42%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: #fff;
+}
+
+.khqr-hint {
+  font-size: 0.82rem;
+  color: #16181d;
+  font-weight: 500;
+  padding-inline: 1.25rem;
+}
+.khqr-banks {
+  font-size: 0.72rem;
+  color: #6b7383;
+  padding: 0.15rem 1.25rem 1.15rem;
+}
+
+@media (max-width: 400px) {
+  .khqr-amount { font-size: 1.6rem; }
+}

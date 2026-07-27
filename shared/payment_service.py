@@ -163,10 +163,13 @@ def render_qr_png(qr_string: str) -> bytes:
     """
     import qrcode
 
+    # Level H recovers ~30% of the symbol. The card design places the
+    # Bakong mark over the centre of the QR, so the extra redundancy is
+    # what keeps it scannable with part of the pattern covered.
     qr = qrcode.QRCode(
-        error_correction=qrcode.constants.ERROR_CORRECT_M,
+        error_correction=qrcode.constants.ERROR_CORRECT_H,
         box_size=10,
-        border=4,
+        border=2,
     )
     qr.add_data(qr_string)
     qr.make(fit=True)
@@ -174,6 +177,133 @@ def render_qr_png(qr_string: str) -> bytes:
     buffer = io.BytesIO()
     image.save(buffer, format="PNG")
     return buffer.getvalue()
+
+
+# --------------------------------------------------------------------------- #
+# KHQR card rendering (Telegram)
+# --------------------------------------------------------------------------- #
+KHQR_RED = (226, 28, 35)
+_INK = (22, 24, 29)
+_MUTED = (107, 115, 131)
+
+
+def _load_font(size: int, bold: bool = False):
+    """Best available TrueType font, falling back to PIL's bitmap font.
+
+    Font availability differs between the dev machine and the VPS, so the
+    first readable candidate wins rather than hardcoding one path.
+    """
+    from PIL import ImageFont
+
+    candidates = (
+        ("arialbd.ttf", "arial.ttf"),
+        ("DejaVuSans-Bold.ttf", "DejaVuSans.ttf"),
+        (
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        ),
+        ("C:/Windows/Fonts/arialbd.ttf", "C:/Windows/Fonts/arial.ttf"),
+    )
+    for bold_path, regular_path in candidates:
+        try:
+            return ImageFont.truetype(bold_path if bold else regular_path, size)
+        except OSError:
+            continue
+    return ImageFont.load_default()
+
+
+def render_khqr_card_png(
+    qr_string: str,
+    amount: str,
+    merchant: str,
+    reference: str = "",
+    currency: str = "USD",
+) -> bytes:
+    """Render the KHQR payment card the bot sends to the customer.
+
+    Mirrors the card shown on the website — red header, merchant, amount,
+    QR with the Bakong mark — so a customer sees the same artefact
+    wherever they pay. Falls back to the bare QR if anything here fails,
+    because a plain scannable code always beats no code at all.
+    """
+    try:
+        from PIL import Image, ImageDraw
+
+        W = 760
+        PAD = 44
+        qr_img = Image.open(io.BytesIO(render_qr_png(qr_string))).convert("RGB")
+        qr_size = W - PAD * 2
+        qr_img = qr_img.resize((qr_size, qr_size), Image.LANCZOS)
+
+        head_h = 108
+        meta_h = 200
+        foot_h = 104
+        H = head_h + meta_h + qr_size + foot_h
+
+        card = Image.new("RGB", (W, H), "white")
+        d = ImageDraw.Draw(card)
+
+        # Red header with the KHQR card's angled lower edge.
+        d.polygon(
+            [(0, 0), (W, 0), (W, head_h - 34), (0, head_h)],
+            fill=KHQR_RED,
+        )
+        d.text((PAD, 26), "KHQR", font=_load_font(38, bold=True), fill="white")
+
+        f_merchant = _load_font(28, bold=True)
+        f_amount = _load_font(60, bold=True)
+        f_cur = _load_font(22, bold=True)
+        f_small = _load_font(22)
+
+        y = head_h + 22
+        d.text((W / 2, y), merchant, font=f_merchant, fill=_INK, anchor="ma")
+
+        y += 46
+        amount_w = d.textlength(amount, font=f_amount)
+        cur_w = d.textlength(f" {currency}", font=f_cur)
+        start = (W - (amount_w + cur_w)) / 2
+        d.text((start, y), amount, font=f_amount, fill=_INK)
+        d.text((start + amount_w, y + 30), f" {currency}", font=f_cur, fill=_MUTED)
+
+        if reference:
+            d.text(
+                (W / 2, y + 74), reference, font=f_small, fill=_MUTED, anchor="ma"
+            )
+
+        # Perforation-style dashed rule.
+        rule_y = head_h + meta_h - 14
+        for x in range(PAD, W - PAD, 14):
+            d.line([(x, rule_y), (x + 7, rule_y)], fill=(201, 206, 216), width=2)
+
+        card.paste(qr_img, (PAD, head_h + meta_h))
+
+        # Bakong mark over the centre. The QR is level H, so the covered
+        # modules are recoverable — verified by decoding the composite.
+        cx = W / 2
+        cy = head_h + meta_h + qr_size / 2
+        r = qr_size * 0.085
+        d.ellipse([cx - r, cy - r, cx + r, cy + r], fill="white")
+        ri = r * 0.82
+        d.ellipse([cx - ri, cy - ri, cx + ri, cy + ri], fill=KHQR_RED)
+        rc = ri * 0.42
+        d.ellipse([cx - rc, cy - rc, cx + rc, cy + rc], fill="white")
+
+        fy = head_h + meta_h + qr_size + 16
+        d.text(
+            (cx, fy), "Scan with any Cambodian banking app",
+            font=_load_font(24, bold=True), fill=_INK, anchor="ma",
+        )
+        d.text(
+            (cx, fy + 36), "ABA · ACLEDA · Wing · Bakong · and more",
+            font=_load_font(20), fill=_MUTED, anchor="ma",
+        )
+
+        out = io.BytesIO()
+        card.save(out, format="PNG")
+        return out.getvalue()
+    except Exception:
+        logger.exception("KHQR card render failed; sending the plain QR")
+        return render_qr_png(qr_string)
 
 
 # --------------------------------------------------------------------------- #

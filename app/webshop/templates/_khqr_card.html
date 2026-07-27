@@ -1,0 +1,46 @@
+{# Reusable KHQR payment card.
+
+   Recreates the familiar KHQR layout — red header, merchant, amount,
+   QR with the Bakong mark centred — so the payment screen reads as a
+   real bank artefact rather than a bare QR image.
+
+   Expects:
+     qr_b64        base64 PNG of the KHQR payload
+     amount        formatted amount string, e.g. "10.00"
+     merchant      merchant / store name
+     currency      optional, defaults to USD
+     reference     optional small line under the header (order no. etc.)
+#}
+<div class="khqr">
+  <div class="khqr-head">
+    <span class="khqr-logo">KHQR</span>
+  </div>
+
+  <div class="khqr-meta">
+    <p class="khqr-merchant">{{ merchant }}</p>
+    <p class="khqr-amount">
+      {{ amount }}<span class="khqr-currency">{{ currency | default("USD") }}</span>
+    </p>
+    {% if reference %}
+      <p class="khqr-reference">{{ reference }}</p>
+    {% endif %}
+  </div>
+
+  <div class="khqr-divider" aria-hidden="true"></div>
+
+  <div class="khqr-qr">
+    <img src="data:image/png;base64,{{ qr_b64 }}"
+         alt="KHQR payment code for {{ amount }} {{ currency | default('USD') }}"
+         width="240" height="240" decoding="async">
+    {# Centre mark. The QR is generated at error-correction level H, so
+       the covered modules are recoverable and the code still scans. #}
+    <span class="khqr-mark" aria-hidden="true">
+      <span class="khqr-mark-inner"></span>
+    </span>
+  </div>
+
+  <p class="khqr-hint">
+    Scan with any Cambodian banking app
+  </p>
+  <p class="khqr-banks">ABA · ACLEDA · Wing · Bakong · and more</p>
+</div>

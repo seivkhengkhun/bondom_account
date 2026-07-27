@@ -9,18 +9,9 @@
     </nav>
 
     <div class="card card-lg" style="text-align:center">
-      <p class="eyebrow">Wallet top-up</p>
-      <p class="price price-xl" style="margin-block:var(--sp-2) var(--sp-5)">${{ amount }}</p>
-
-      <div class="qr-frame">
-        <img src="data:image/png;base64,{{ qr_b64 }}"
-             alt="KHQR payment code for ${{ amount }}" width="272" height="272">
-      </div>
-
-      <p class="muted text-sm" style="margin-top:var(--sp-4)">
-        Open <b>ABA</b>, <b>ACLEDA</b>, <b>Wing</b> or any Cambodian banking app
-        and scan this KHQR.
-      </p>
+      {% with reference = "Wallet top-up" %}
+        {% include "_khqr_card.html" %}
+      {% endwith %}
 
       <div id="status" class="status status-waiting" role="status" aria-live="polite"
            style="margin-block:var(--sp-5) var(--sp-3)">
