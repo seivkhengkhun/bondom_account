@@ -37,6 +37,24 @@ logger = logging.getLogger(__name__)
 router = APIRouter(include_in_schema=False)
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
+_STATIC_DIR = Path(__file__).parent / "static"
+
+
+def _asset_version() -> str:
+    """Short fingerprint of the stylesheet, appended to its URL.
+
+    Without this the browser keeps serving whatever ``shop.css`` it cached
+    before the deploy, so markup ships styled by the previous release —
+    which is how a redesigned component ends up rendering as raw text.
+    Recomputed per call but keyed on mtime, so it is a stat() not a read.
+    """
+    css = _STATIC_DIR / "shop.css"
+    try:
+        stat = css.stat()
+    except OSError:
+        return "0"
+    return f"{int(stat.st_mtime)}-{stat.st_size}"
+
 _background_tasks: set[asyncio.Task] = set()
 _bot: Bot | None = None
 _bot_username: str = ""
@@ -79,6 +97,7 @@ async def _render(request: Request, template: str, **context) -> HTMLResponse:
     context.setdefault("sms_enabled", settings.sms_enabled)
     context.setdefault("csrf_token", csrf_token(_current_session(request)))
     context.setdefault("merchant", settings.merchant_name)
+    context.setdefault("asset_v", _asset_version())
     return templates.TemplateResponse(
         request=request, name=template, context=context
     )
