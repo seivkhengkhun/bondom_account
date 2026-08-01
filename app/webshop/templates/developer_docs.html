@@ -138,6 +138,86 @@ Content-Type: application/json
     </section>
 
     <section class="card card-lg">
+      <h2 style="font-size:var(--fs-lg)">Example: rent an SMS number</h2>
+      <p class="muted text-sm" style="margin-block:var(--sp-2) var(--sp-3)">
+        Rentals are charged to your wallet the moment the number is issued.
+        If no code arrives within the delivery window the rental is
+        refunded to your wallet automatically — you do not need to ask.
+      </p>
+
+      <h3 style="font-size:var(--fs-md);margin-top:var(--sp-4)">Supported countries</h3>
+      <p class="muted text-sm" style="margin-block:var(--sp-2) var(--sp-3)">
+        Availability and pricing change often, so treat this table as a
+        snapshot and read <code>GET /sms/countries</code> at runtime rather
+        than hardcoding it. Not every country is offered for every service.
+      </p>
+      <div style="overflow-x:auto">
+        <table class="legal-table">
+          <thead>
+            <tr><th>Code</th><th>Country</th><th>Services</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>US</code></td><td>United States</td><td>Facebook, Instagram</td></tr>
+            <tr><td><code>KH</code></td><td>Cambodia</td><td>Facebook</td></tr>
+            <tr><td><code>HK</code></td><td>Hong Kong</td><td>Facebook</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="muted text-sm" style="margin-top:var(--sp-3)">
+        <code>country_code</code> is the ISO 3166-1 alpha-2 code and is
+        case-insensitive. Requesting a country a service does not offer
+        returns <code>400 sms_order_failed</code>, with the reason in
+        <code>message</code>.
+      </p>
+
+      <p class="eyebrow" style="margin-top:var(--sp-5)">Request — list what is available</p>
+      <pre class="input" style="white-space:pre-wrap">GET {{ base_url }}/api/v1/sms/countries?service=facebook
+X-API-Key: bk_live_xxxxxxxx_yyyyyyyyyyyy</pre>
+
+      <p class="eyebrow" style="margin-top:var(--sp-4)">Response 200</p>
+      <pre class="input" style="white-space:pre-wrap">[
+  {"country": "United States", "code": "US", "price": "0.06", "success_rate": 0.92},
+  {"country": "Cambodia",      "code": "KH", "price": "0.06", "success_rate": 0.88},
+  {"country": "Hong Kong",     "code": "HK", "price": "0.07", "success_rate": null}
+]</pre>
+      <p class="muted text-sm" style="margin-top:var(--sp-2)">
+        <code>success_rate</code> is the recent delivery rate, or
+        <code>null</code> when there is not enough history yet. Prefer a
+        country with a high rate when you have a choice.
+      </p>
+
+      <p class="eyebrow" style="margin-top:var(--sp-5)">Request — rent a Hong Kong number</p>
+      <pre class="input" style="white-space:pre-wrap">POST {{ base_url }}/api/v1/sms/orders
+X-API-Key: bk_live_xxxxxxxx_yyyyyyyyyyyy
+Content-Type: application/json
+
+{"service": "facebook", "country_code": "HK"}</pre>
+
+      <p class="eyebrow" style="margin-top:var(--sp-4)">Response 201</p>
+      <pre class="input" style="white-space:pre-wrap">{
+  "id": 128,
+  "service": "facebook",
+  "country": "hk",
+  "phone": "85260123456",
+  "status": "waiting_sms",
+  "price": "0.07",
+  "code": ""
+}</pre>
+
+      <p class="eyebrow" style="margin-top:var(--sp-4)">Poll for the code</p>
+      <pre class="input" style="white-space:pre-wrap">GET {{ base_url }}/api/v1/sms/orders/128
+X-API-Key: bk_live_xxxxxxxx_yyyyyyyyyyyy
+
+{"id": 128, "status": "completed", "code": "123456", ...}</pre>
+      <p class="muted text-sm" style="margin-top:var(--sp-2)">
+        Poll every few seconds, not in a tight loop — polling counts
+        against your rate limit. <code>status</code> settles on
+        <code>completed</code>, <code>refunded</code> or
+        <code>failed</code>.
+      </p>
+    </section>
+
+    <section class="card card-lg">
       <h2 style="font-size:var(--fs-lg)">Errors</h2>
       <p class="muted text-sm" style="margin-block:var(--sp-2) var(--sp-3)">
         Every failure uses the same shape, so you only need one handler:
@@ -176,6 +256,7 @@ Content-Type: application/json
               ("404", "order_not_found", "No such order, or not yours"),
               ("409", "out_of_stock", "Not enough stock left"),
               ("429", "rate_limit_exceeded", "Slow down; see Retry-After"),
+              ("400", "sms_order_failed", "SMS rental could not be created — see message"),
               ("503", "provider_unavailable", "SMS provider is down"),
             ] %}
             {% for status, code, meaning in errs %}

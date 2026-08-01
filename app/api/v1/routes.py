@@ -68,15 +68,29 @@ class OrderOut(BaseModel):
 
 
 class SmsCountryOut(BaseModel):
-    country: str
-    code: str
-    price: str
-    success_rate: float | None = None
+    country: str = Field(..., description="Display name, e.g. Hong Kong")
+    code: str = Field(..., description="ISO 3166-1 alpha-2, e.g. HK")
+    price: str = Field(..., description="What you pay, in USD")
+    success_rate: float | None = Field(
+        None,
+        description=(
+            "Recent delivery rate 0-1, or null when there is not enough "
+            "history yet."
+        ),
+    )
 
 
 class SmsOrderIn(BaseModel):
     service: str = Field(..., description="facebook or instagram")
-    country_code: str
+    country_code: str = Field(
+        ...,
+        description=(
+            "ISO 3166-1 alpha-2 country code, case-insensitive. "
+            "Currently US, KH and HK — read GET /sms/countries for the "
+            "live list rather than hardcoding it."
+        ),
+        examples=["HK"],
+    )
 
 
 class SmsOrderOut(BaseModel):
