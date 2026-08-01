@@ -465,6 +465,7 @@ class AdminState(rx.State):
     manage_name: str = ""
     manage_price: str = ""
     manage_warranty: str = "0"
+    manage_min_qty: str = "1"
     manage_category_choice: str = ""
     manage_category_new: str = ""
     manage_client_note: str = ""
@@ -678,6 +679,11 @@ class AdminState(rx.State):
                 self.manage_warranty = str(selected.warranty_days)
                 self.manage_category_choice = selected.category
             async with AsyncSessionLocal() as session:
+                self.manage_min_qty = str(
+                    await services.get_product_min_quantity(
+                        session, selected_id
+                    )
+                )
                 self.manage_client_note = (
                     await services.get_product_client_note(session, selected_id)
                     or ""
@@ -706,6 +712,7 @@ class AdminState(rx.State):
             self.manage_name = ""
             self.manage_price = ""
             self.manage_warranty = "0"
+            self.manage_min_qty = "1"
             self.manage_category_choice = ""
             self.manage_client_note = ""
         self.orders = [
@@ -1226,6 +1233,9 @@ class AdminState(rx.State):
         )
         self.manage_category_new = ""
         async with AsyncSessionLocal() as session:
+            self.manage_min_qty = str(
+                await services.get_product_min_quantity(session, selected_id)
+            )
             self.manage_client_note = (
                 await services.get_product_client_note(session, selected_id)
                 or ""
@@ -1236,6 +1246,9 @@ class AdminState(rx.State):
 
     def set_manage_warranty(self, value: str) -> None:
         self.manage_warranty = value
+
+    def set_manage_min_qty(self, value: str) -> None:
+        self.manage_min_qty = value
 
     def set_manage_client_note(self, value: str) -> None:
         self.manage_client_note = value
@@ -1370,6 +1383,49 @@ class AdminState(rx.State):
             )
         self.manage_message = (
             f"✅ Updated warranty for product #{product_id} to {warranty_days} day(s)."
+        )
+        await self.load_all()
+
+    async def update_selected_min_qty(self) -> None:
+        """Set the smallest quantity customers may order of this product."""
+        if not self.authed:
+            return
+        self.touch()
+        product_id = self._selected_product_id()
+        if product_id <= 0:
+            self.manage_message = "⚠ Select a product first."
+            return
+
+        try:
+            quantity = int(self.manage_min_qty or "1")
+        except ValueError:
+            self.manage_message = "⚠ Minimum quantity must be a whole number."
+            return
+        if quantity < 1:
+            self.manage_message = "⚠ Minimum quantity must be at least 1."
+            return
+        if quantity > services.MAX_MIN_ORDER_QTY:
+            self.manage_message = (
+                f"⚠ Minimum quantity cannot exceed "
+                f"{services.MAX_MIN_ORDER_QTY}."
+            )
+            return
+
+        async with AsyncSessionLocal() as session:
+            stored = await services.set_product_min_quantity(
+                session, product_id, quantity
+            )
+        self.manage_min_qty = str(stored)
+        self.manage_message = (
+            f"✅ Minimum order for product #{product_id} is now {stored}."
+            if stored > 1
+            else f"✅ Product #{product_id} has no minimum order."
+        )
+        await audit.log_action(
+            audit.ACTION_MIN_QTY_CHANGE,
+            target_type="product",
+            target_id=product_id,
+            summary=f"Minimum order quantity set to {stored}",
         )
         await self.load_all()
 
@@ -1943,6 +1999,22 @@ def manage_product_card() -> rx.Component:
                     rx.button(
                         "Update Warranty",
                         on_click=AdminState.update_selected_warranty,
+                        variant="soft",
+                        size="2",
+                    ),
+                ),
+                field_row(
+                    "Minimum order quantity (1 = no minimum)",
+                    rx.input(
+                        placeholder="1",
+                        type="number",
+                        value=AdminState.manage_min_qty,
+                        on_change=AdminState.set_manage_min_qty,
+                        width="10em",
+                    ),
+                    rx.button(
+                        "Update Minimum",
+                        on_click=AdminState.update_selected_min_qty,
                         variant="soft",
                         size="2",
                     ),

@@ -32,6 +32,7 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from shared import payment_limits
 from shared.config import settings
 from shared.database import AsyncSessionLocal
 from shared.models import (
@@ -449,6 +450,11 @@ async def create_payment_session(session: AsyncSession, order_id: int) -> Paymen
         if order.status is not OrderStatus.PENDING:
             raise PaymentError(f"Order {order_id} is already {order.status.value}")
         amount = order.total_price
+        buyer_id = order.user_id
+
+    # Throttled before the Bakong call: each QR spawns a poller that lives
+    # for the full 15-minute lifetime, so refresh loops are expensive.
+    payment_limits.consume("order", buyer_id, target=f"order:{order_id}")
 
     qr_string, md5_hash = await generate_payment_qr(
         str(order_id), float(amount), "USD"
@@ -562,6 +568,8 @@ async def create_wallet_topup_session(
     reason = topup_amount_error(amount, override=override)
     if reason is not None:
         raise PaymentError(reason)
+
+    payment_limits.consume("topup", user_id, target=f"topup:{amount}")
 
     async with transaction_scope(session):
         user = await session.get(User, user_id)

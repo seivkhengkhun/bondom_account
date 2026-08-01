@@ -1,6 +1,32 @@
 {% extends "base.html" %}
 {% block title %}Wallet — Bondom Account{% endblock %}
 {% block content %}
+  {# Scrolling notice. Uses a CSS animation rather than the obsolete
+     <marquee> tag, and the text is duplicated so the loop has no visible
+     gap. role="alert" is deliberately avoided — it would interrupt a
+     screen reader on every page load; the static copy below carries the
+     same wording for assistive tech and for reduced-motion users. #}
+  <div class="notice-marquee" aria-hidden="true">
+    <div class="notice-marquee-track">
+      {% for _ in range(2) %}
+        <span class="notice-marquee-item">
+          <svg class="ic ic-sm" aria-hidden="true"><use href="#i-alert"/></svg>
+          <b>Important Notice:</b> Please do not top up more than you need or
+          intend to use. This policy helps prevent money laundering and other
+          fraudulent activity. We are <b>not responsible for, and will not
+          provide refunds for</b>, any unused balance or excess funds added to
+          your account.
+        </span>
+      {% endfor %}
+    </div>
+  </div>
+  <p class="sr-only">
+    Important notice: please do not top up more than you need or intend to
+    use. This policy helps prevent money laundering and other fraudulent
+    activity. We are not responsible for, and will not provide refunds for,
+    any unused balance or excess funds added to your account.
+  </p>
+
   <div class="narrow stack-lg">
     <div class="card card-lg">
       <span class="eyebrow">Wallet balance</span>

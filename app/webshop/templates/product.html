@@ -82,12 +82,16 @@
               <label class="label" for="qty">Quantity</label>
               <div class="stepper">
                 <button type="button" data-step="-1" aria-label="Decrease quantity">&minus;</button>
-                <input id="qty" type="number" name="quantity" value="1" min="1"
+                <input id="qty" type="number" name="quantity"
+                       value="{{ min_qty }}" min="{{ min_qty }}"
                        max="{{ o.available }}" inputmode="numeric"
                        aria-describedby="qty-hint">
                 <button type="button" data-step="1" aria-label="Increase quantity">+</button>
               </div>
-              <p class="field-hint" id="qty-hint">{{ o.available }} available</p>
+              <p class="field-hint" id="qty-hint">
+              {{ o.available }} available{% if min_qty > 1 %} &middot;
+              minimum order {{ min_qty }}{% endif %}
+            </p>
               <p class="field-error" id="qty-error" hidden>
                 <svg class="ic ic-sm" aria-hidden="true"><use href="#i-alert"/></svg>
                 <span></span>
@@ -96,7 +100,7 @@
 
             <div class="total-row">
               <span>Total</span>
-              <b id="total">${{ o.product.price }}</b>
+              <b id="total">${{ "%.2f" | format(o.product.price * min_qty) }}</b>
             </div>
 
             <button type="submit" class="btn btn-primary btn-lg btn-block">
@@ -135,6 +139,7 @@
   (function () {
     var unit = parseFloat("{{ o.product.price }}");
     var max = {{ o.available }};
+    var min = {{ min_qty }};
     var qty = document.getElementById("qty");
     var total = document.getElementById("total");
     var err = document.getElementById("qty-error");
@@ -146,7 +151,10 @@
       var message = "";
 
       if (v > max) { v = max; message = "Only " + max + " available."; }
-      else if (v < 1) { v = 1; message = "Minimum quantity is 1."; }
+      else if (v < min) {
+        v = min;
+        message = "This product has a minimum order of " + min + ".";
+      }
 
       if (v !== raw) qty.value = v;
       total.textContent = "$" + (unit * v).toFixed(2);
@@ -156,13 +164,13 @@
       qty.setAttribute("aria-invalid", invalid ? "true" : "false");
       if (invalid) errText.textContent = message;
 
-      document.querySelector('[data-step="-1"]').disabled = v <= 1;
+      document.querySelector('[data-step="-1"]').disabled = v <= min;
       document.querySelector('[data-step="1"]').disabled = v >= max;
     }
 
     document.querySelectorAll(".stepper [data-step]").forEach(function (b) {
       b.addEventListener("click", function () {
-        qty.value = (parseInt(qty.value, 10) || 1) + parseInt(b.dataset.step, 10);
+        qty.value = (parseInt(qty.value, 10) || min) + parseInt(b.dataset.step, 10);
         clamp(false);
       });
     });

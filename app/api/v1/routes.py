@@ -13,7 +13,7 @@ from decimal import Decimal, InvalidOperation
 from fastapi import APIRouter, Query
 from pydantic import BaseModel, Field
 
-from shared import services, sms_service
+from shared import payment_limits, services, sms_service
 from shared.models import OrderStatus
 
 from .deps import ApiError, CallerDep, SessionDep
@@ -45,6 +45,9 @@ class ProductOut(BaseModel):
     price: str
     warranty_days: int
     in_stock: int
+    min_quantity: int = Field(
+        1, description="Smallest quantity this product may be ordered in."
+    )
 
 
 class BalanceOut(BaseModel):
@@ -140,6 +143,8 @@ async def list_products(
 ) -> ProductPage:
     caller.require("read")
     overviews = await services.list_product_overviews(db)
+    # One lookup for the whole catalogue, not one per product.
+    minimums = await services.get_product_min_quantities(db)
     out = []
     for o in overviews:
         if not o.product.is_active:
@@ -156,6 +161,7 @@ async def list_products(
                 price=f"{o.product.price:.2f}",
                 warranty_days=o.product.warranty_days,
                 in_stock=o.available,
+                min_quantity=minimums.get(o.product.id, 1),
             )
         )
     window = out[offset : offset + limit]
@@ -178,6 +184,9 @@ async def get_product(
     for o in await services.list_product_overviews(db):
         if o.product.id == product_id and o.product.is_active:
             return ProductOut(
+                min_quantity=await services.get_product_min_quantity(
+                    db, product_id
+                ),
                 id=o.product.id,
                 name=o.product.name,
                 category=o.product.category,
@@ -245,6 +254,19 @@ async def create_order(
             status=409,
             available=exc.available,
             requested=exc.requested,
+        ) from exc
+    except services.BelowMinimumQuantityError as exc:
+        raise ApiError(
+            "below_minimum_quantity",
+            f"This product has a minimum order quantity of {exc.minimum}.",
+            status=400,
+            minimum=exc.minimum,
+            requested=exc.requested,
+        ) from exc
+    except payment_limits.PaymentRateLimited as exc:
+        raise ApiError(
+            "payment_rate_limited", exc.reason, status=429,
+            retry_after=exc.retry_after,
         ) from exc
     except services.ProductNotFoundError as exc:
         raise ApiError("product_not_found", str(exc), 404) from exc

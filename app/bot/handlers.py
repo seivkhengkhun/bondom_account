@@ -25,7 +25,7 @@ from aiogram.types import (
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from shared import payment_service, services, sms_service
+from shared import payment_limits, payment_service, services, sms_service
 from shared.config import settings
 from shared.database import AsyncSessionLocal
 from shared.models import Order, OrderStatus, Product, SmsOrderStatus
@@ -1037,6 +1037,9 @@ async def cb_buy(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(PurchaseState.waiting_for_quantity)
     await state.update_data(product_id=product_id)
 
+    async with AsyncSessionLocal() as session:
+        min_qty = await services.get_product_min_quantity(session, product_id)
+
     cancel_kb = InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="Cancel", callback_data="buy_cancel")]
@@ -1049,6 +1052,8 @@ async def cb_buy(callback: CallbackQuery, state: FSMContext) -> None:
             if show_stock
             else "\n"
         )
+        # Tell them before they type, not after we reject it.
+        + (f"Minimum order: <b>{min_qty}</b>\n" if min_qty > 1 else "")
         + "Send the quantity you want to buy (number only).",
         reply_markup=cancel_kb,
     )
@@ -1088,6 +1093,17 @@ async def msg_buy_quantity(message: Message, state: FSMContext) -> None:
         user = await services.get_or_create_user(
             session, message.from_user.id, message.from_user.username
         )
+
+        # Same reasoning as the website: reject before stock is allocated,
+        # so a throttled request never strands a pending order.
+        status = payment_limits.check("order", user.id)
+        if not status.allowed:
+            await message.answer(
+                "⏳ Too many payment requests. Please wait "
+                f"{status.retry_after} seconds before trying again."
+            )
+            return
+
         try:
             order = await services.create_order_and_allocate_stock(
                 session,
@@ -1109,6 +1125,15 @@ async def msg_buy_quantity(message: Message, state: FSMContext) -> None:
             )
             await state.clear()
             return
+        except services.BelowMinimumQuantityError as exc:
+            await message.answer(
+                f"This product has a minimum order of {exc.minimum}. "
+                f"Send {exc.minimum} or more."
+            )
+            return
+        except payment_limits.PaymentRateLimited as exc:
+            await message.answer(f"⏳ {exc.reason}")
+            return
         except services.OutOfStockError:
             await message.answer(
                 "😔 Not enough stock for that quantity. "
@@ -1122,7 +1147,14 @@ async def msg_buy_quantity(message: Message, state: FSMContext) -> None:
             await state.clear()
             return
 
-        payment = await payment_service.create_payment_session(session, order.id)
+        try:
+            payment = await payment_service.create_payment_session(
+                session, order.id
+            )
+        except Exception:
+            # Never leave an order holding stock nobody can pay for.
+            await services.cancel_order_and_release_inventory(session, order.id)
+            raise
 
     await state.clear()
 

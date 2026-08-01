@@ -17,7 +17,7 @@ from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from shared import payment_service, services
+from shared import payment_limits, payment_service, services
 from shared.config import settings
 from shared.database import AsyncSessionLocal
 from shared.models import OrderStatus, Product
@@ -154,11 +154,13 @@ async def product_page(request: Request, product_id: int) -> HTMLResponse:
         return RedirectResponse("/")  # type: ignore[return-value]
     async with AsyncSessionLocal() as session:
         note = await services.get_product_client_note(session, product_id)
+        min_qty = await services.get_product_min_quantity(session, product_id)
     return await _render(
         request,
         "product.html",
         o=selected,
         note=note,
+        min_qty=min_qty,
         show_stock=show_stock,
         error=request.query_params.get("error", ""),
     )
@@ -193,15 +195,39 @@ async def web_buy(
             user = await services.get_or_create_user(
                 session, sess["tid"], sess.get("u") or ""
             )
+
+            # Check the throttle BEFORE allocating stock. Rejecting after
+            # the order exists would leave a pending order holding
+            # inventory that nobody can pay for — worse than the traffic
+            # the limit is meant to prevent.
+            status = payment_limits.check("order", user.id)
+            if not status.allowed:
+                return RedirectResponse(
+                    f"/p/{product_id}?error="
+                    + quote_plus(
+                        "Too many payment requests. Please wait "
+                        f"{status.retry_after} seconds before trying again."
+                    ),
+                    status_code=303,
+                )
+
             order = await services.create_order_and_allocate_stock(
                 session,
                 OrderCreate(
                     user_id=user.id, product_id=product_id, quantity=quantity
                 ),
             )
-            payment = await payment_service.create_payment_session(
-                session, order.id
-            )
+            try:
+                payment = await payment_service.create_payment_session(
+                    session, order.id
+                )
+            except Exception:
+                # Never strand an order holding stock: release it and let
+                # the caller see the original failure.
+                await services.cancel_order_and_release_inventory(
+                    session, order.id
+                )
+                raise
     except services.OutOfStockError:
         return RedirectResponse(
             f"/p/{product_id}?error=Not+enough+stock+available",
@@ -213,6 +239,19 @@ async def web_buy(
     ):
         return RedirectResponse(
             f"/p/{product_id}?error=Your+account+is+blocked",
+            status_code=303,
+        )
+    except services.BelowMinimumQuantityError as exc:
+        return RedirectResponse(
+            f"/p/{product_id}?error="
+            + quote_plus(
+                f"This product has a minimum order of {exc.minimum}."
+            ),
+            status_code=303,
+        )
+    except payment_limits.PaymentRateLimited as exc:
+        return RedirectResponse(
+            f"/p/{product_id}?error=" + quote_plus(str(exc)),
             status_code=303,
         )
     except services.ProductNotFoundError:
@@ -427,6 +466,10 @@ async def wallet_topup(
         try:
             topup = await payment_service.create_wallet_topup_session(
                 session, user.id, value
+            )
+        except payment_limits.PaymentRateLimited as exc:
+            return RedirectResponse(
+                "/wallet?error=" + quote_plus(str(exc)), status_code=303
             )
         except payment_service.PaymentError as exc:
             return RedirectResponse(

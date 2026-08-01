@@ -236,6 +236,11 @@ body {
 }
 
 img, svg, video { display: block; max-width: 100%; }
+
+/* Components below set display: flex/grid, which silently overrides the
+   browser default of [hidden] { display: none } — so `hidden` stopped
+   hiding them. Restore it once, here, for every element. */
+[hidden] { display: none !important; }
 button, input, select, textarea { font: inherit; color: inherit; }
 button { background: none; border: none; cursor: pointer; }
 ul, ol { list-style: none; }
@@ -1789,4 +1794,66 @@ pre.sdk-sample,
 
 @media (max-width: 400px) {
   .khqr-amount { font-size: 1.6rem; }
+}
+
+/* -------------------------------------------------- scrolling notice bar */
+.notice-marquee {
+  display: flex;
+  overflow: hidden;
+  gap: 0;
+  margin-bottom: var(--sp-5);
+  padding-block: var(--sp-2);
+  background: var(--warn-soft);
+  border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent);
+  border-radius: var(--r-sm);
+  color: var(--warn);
+  font-size: var(--fs-sm);
+  /* The track is twice the content width; keeping it off the main
+     scroll container avoids widening the page. */
+  user-select: none;
+}
+.notice-marquee-track {
+  display: flex;
+  flex-shrink: 0;
+  gap: var(--sp-12);
+  padding-inline: var(--sp-6);
+  min-width: 100%;
+  animation: notice-scroll 38s linear infinite;
+  will-change: transform;
+}
+.notice-marquee:hover .notice-marquee-track,
+.notice-marquee:focus-within .notice-marquee-track {
+  animation-play-state: paused;
+}
+.notice-marquee-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  white-space: nowrap;
+}
+.notice-marquee-item b { font-weight: var(--fw-bold); }
+
+@keyframes notice-scroll {
+  from { transform: translateX(0); }
+  /* -50% because the message is duplicated: the loop restarts exactly
+     where the second copy began, so there is no visible jump. */
+  to { transform: translateX(-50%); }
+}
+
+/* Movement is the point of a marquee, so for reduced-motion users the
+   whole thing stops and wraps into a normal static callout instead. */
+@media (prefers-reduced-motion: reduce) {
+  .notice-marquee { display: block; }
+  .notice-marquee-track {
+    animation: none;
+    display: block;
+    padding: 0 var(--sp-4);
+  }
+  .notice-marquee-item { white-space: normal; display: inline; }
+  .notice-marquee-item:nth-child(2) { display: none; }
+}
+
+@media (max-width: 720px) {
+  .notice-marquee { font-size: var(--fs-xs); }
+  .notice-marquee-track { animation-duration: 30s; }
 }

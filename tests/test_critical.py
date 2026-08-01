@@ -32,6 +32,7 @@ from shared.admin_auth import (  # noqa: E402
     verify_hash,
 )
 from shared.database import Base  # noqa: E402
+from sqlalchemy import func, select  # noqa: E402
 from shared.models import Order, User  # noqa: E402
 from shared.payment_service import (  # noqa: E402
     MAX_TOPUP,
@@ -410,3 +411,186 @@ def test_effective_minimum_values():
     assert effective_min_topup(True) == OVERRIDE_MIN_TOPUP
     # The override lowers the floor, it does not remove it.
     assert OVERRIDE_MIN_TOPUP > 0
+
+
+# --------------------------------------------------------------------------- #
+# Minimum order quantity
+# --------------------------------------------------------------------------- #
+async def _product(maker, price="1.00"):
+    from shared.schemas import ProductCreate
+    async with maker() as s:
+        return await services.create_product(
+            s, ProductCreate(name="p", price=Decimal(price), category="c",
+                             warranty_days=0)
+        )
+
+
+@pytest.mark.asyncio
+async def test_min_quantity_defaults_to_one(db):
+    p = await _product(db)
+    async with db() as s:
+        assert await services.get_product_min_quantity(s, p.id) == 1
+
+
+@pytest.mark.asyncio
+async def test_min_quantity_set_and_clear(db):
+    p = await _product(db)
+    async with db() as s:
+        assert await services.set_product_min_quantity(s, p.id, 5) == 5
+    async with db() as s:
+        assert await services.get_product_min_quantity(s, p.id) == 5
+        assert (await services.get_product_min_quantities(s))[p.id] == 5
+
+    # Setting it back to 1 removes the row rather than storing the default.
+    async with db() as s:
+        assert await services.set_product_min_quantity(s, p.id, 1) == 1
+    async with db() as s:
+        assert await services.get_product_min_quantity(s, p.id) == 1
+        assert p.id not in await services.get_product_min_quantities(s)
+
+
+@pytest.mark.asyncio
+async def test_min_quantity_is_clamped(db):
+    p = await _product(db)
+    async with db() as s:
+        assert await services.set_product_min_quantity(s, p.id, 0) == 1
+    async with db() as s:
+        assert await services.set_product_min_quantity(s, p.id, 10_000) == (
+            services.MAX_MIN_ORDER_QTY
+        )
+
+
+@pytest.mark.asyncio
+async def test_min_quantity_unknown_product_raises(db):
+    async with db() as s:
+        with pytest.raises(services.ProductNotFoundError):
+            await services.set_product_min_quantity(s, 999999, 3)
+
+
+@pytest.mark.asyncio
+async def test_order_below_minimum_is_refused_and_allocates_nothing(db):
+    from shared.models import Inventory, InventoryStatus
+    from shared.schemas import OrderCreate
+
+    user = await _user(db)
+    p = await _product(db)
+    async with db() as s:
+        for i in range(5):
+            s.add(Inventory(product_id=p.id, data=f"item{i}",
+                            status=InventoryStatus.AVAILABLE))
+        await s.commit()
+    async with db() as s:
+        await services.set_product_min_quantity(s, p.id, 3)
+
+    async with db() as s:
+        with pytest.raises(services.BelowMinimumQuantityError) as err:
+            await services.create_order_and_allocate_stock(
+                s, OrderCreate(user_id=user.id, product_id=p.id, quantity=2)
+            )
+        assert err.value.minimum == 3
+        assert err.value.requested == 2
+
+    # Nothing was reserved by the failed attempt.
+    async with db() as s:
+        available = await s.scalar(
+            select(func.count()).select_from(Inventory).where(
+                Inventory.product_id == p.id,
+                Inventory.status == InventoryStatus.AVAILABLE,
+            )
+        )
+        assert available == 5
+        assert await s.scalar(select(func.count()).select_from(Order)) == 0
+
+
+@pytest.mark.asyncio
+async def test_order_at_the_minimum_succeeds(db):
+    from shared.models import Inventory, InventoryStatus
+    from shared.schemas import OrderCreate
+
+    user = await _user(db)
+    p = await _product(db)
+    async with db() as s:
+        for i in range(5):
+            s.add(Inventory(product_id=p.id, data=f"item{i}",
+                            status=InventoryStatus.AVAILABLE))
+        await s.commit()
+    async with db() as s:
+        await services.set_product_min_quantity(s, p.id, 3)
+
+    async with db() as s:
+        order = await services.create_order_and_allocate_stock(
+            s, OrderCreate(user_id=user.id, product_id=p.id, quantity=3)
+        )
+        assert order.id is not None
+
+
+@pytest.mark.asyncio
+async def test_wallet_one_tap_buy_respects_the_minimum(db):
+    """buy_one_with_wallet buys exactly 1, so a higher minimum blocks it —
+    and must not take the money on the way out."""
+    from shared.models import Inventory, InventoryStatus
+
+    user = await _user(db)
+    p = await _product(db)
+    async with db() as s:
+        s.add(Inventory(product_id=p.id, data="x",
+                        status=InventoryStatus.AVAILABLE))
+        await s.commit()
+    async with db() as s:
+        await services.add_user_balance(s, user.id, Decimal("10.00"))
+        await services.set_product_min_quantity(s, p.id, 2)
+
+    async with db() as s:
+        with pytest.raises(services.BelowMinimumQuantityError):
+            await services.buy_one_with_wallet(s, user.id, p.id)
+
+    async with db() as s:
+        assert await services.get_user_balance(s, user.id) == Decimal("10.00")
+
+
+# --------------------------------------------------------------------------- #
+# Payment request rate limiting
+# --------------------------------------------------------------------------- #
+def test_payment_limit_allows_then_blocks():
+    from shared import payment_limits as pl
+    pl.reset()
+    for i in range(pl.MAX_REQUESTS):
+        pl.consume("order", 1, target=f"order:{i}")
+    with pytest.raises(pl.PaymentRateLimited) as err:
+        pl.consume("order", 1, target="order:last")
+    assert err.value.retry_after >= 1
+    pl.reset()
+
+
+def test_payment_limit_blocks_immediate_duplicates():
+    from shared import payment_limits as pl
+    pl.reset()
+    pl.consume("topup", 7, target="topup:5.00")
+    with pytest.raises(pl.PaymentRateLimited):
+        pl.consume("topup", 7, target="topup:5.00")
+    # A different target is fine — it is not a duplicate.
+    pl.consume("topup", 7, target="topup:9.00")
+    pl.reset()
+
+
+def test_payment_limit_is_per_user_and_per_kind():
+    from shared import payment_limits as pl
+    pl.reset()
+    for i in range(pl.MAX_REQUESTS):
+        pl.consume("order", 1, target=f"o{i}")
+    # Another user is unaffected...
+    pl.consume("order", 2, target="o0")
+    # ...and so is a different kind for the same user, so a burst of
+    # top-ups cannot lock someone out of paying for an order.
+    pl.consume("topup", 1, target="t0")
+    pl.reset()
+
+
+def test_payment_limit_reset_is_scoped():
+    from shared import payment_limits as pl
+    pl.reset()
+    for i in range(pl.MAX_REQUESTS):
+        pl.consume("order", 1, target=f"o{i}")
+    pl.reset(kind="order", user_id=1)
+    pl.consume("order", 1, target="fresh")
+    pl.reset()

@@ -803,6 +803,98 @@ async def set_product_client_note(
     return value
 
 
+PRODUCT_MIN_QTY_KEY_PREFIX = "product_min_qty:"
+DEFAULT_MIN_ORDER_QTY = 1
+MAX_MIN_ORDER_QTY = 100
+
+
+def _product_min_qty_key(product_id: int) -> str:
+    return f"{PRODUCT_MIN_QTY_KEY_PREFIX}{product_id}"
+
+
+async def get_product_min_quantity(
+    session: AsyncSession, product_id: int
+) -> int:
+    """Smallest quantity a customer may order of this product.
+
+    Defaults to 1. Raising it stops tiny orders that each spawn their own
+    KHQR payment session and Bakong polling task for a few cents.
+    """
+    async with transaction_scope(session):
+        row = await session.get(AppSetting, _product_min_qty_key(product_id))
+        if row is None:
+            return DEFAULT_MIN_ORDER_QTY
+        try:
+            value = int(row.value)
+        except (TypeError, ValueError):
+            return DEFAULT_MIN_ORDER_QTY
+    return max(DEFAULT_MIN_ORDER_QTY, min(value, MAX_MIN_ORDER_QTY))
+
+
+async def get_product_min_quantities(
+    session: AsyncSession,
+) -> dict[int, int]:
+    """Every configured minimum, keyed by product id.
+
+    One query for the whole catalogue — the storefront and admin list
+    render many products at once and must not issue a lookup per row.
+    """
+    async with transaction_scope(session):
+        rows = (
+            await session.execute(
+                select(AppSetting.key, AppSetting.value).where(
+                    AppSetting.key.like(f"{PRODUCT_MIN_QTY_KEY_PREFIX}%")
+                )
+            )
+        ).all()
+
+    out: dict[int, int] = {}
+    for key, value in rows:
+        try:
+            product_id = int(str(key).removeprefix(PRODUCT_MIN_QTY_KEY_PREFIX))
+            qty = int(value)
+        except (TypeError, ValueError):
+            continue
+        out[product_id] = max(DEFAULT_MIN_ORDER_QTY, min(qty, MAX_MIN_ORDER_QTY))
+    return out
+
+
+async def set_product_min_quantity(
+    session: AsyncSession, product_id: int, quantity: int
+) -> int:
+    """Set the per-product minimum; 1 removes the restriction."""
+    quantity = max(DEFAULT_MIN_ORDER_QTY, min(int(quantity), MAX_MIN_ORDER_QTY))
+    key = _product_min_qty_key(product_id)
+    async with transaction_scope(session):
+        product = await session.get(Product, product_id)
+        if product is None:
+            raise ProductNotFoundError(product_id)
+
+        row = await session.get(AppSetting, key)
+        if quantity <= DEFAULT_MIN_ORDER_QTY:
+            # Storing the default would just be noise.
+            if row is not None:
+                await session.delete(row)
+        elif row is None:
+            session.add(AppSetting(key=key, value=str(quantity)))
+        else:
+            row.value = str(quantity)
+    return quantity
+
+
+class BelowMinimumQuantityError(ServiceError):
+    """Raised when an order is smaller than the product's minimum."""
+
+    def __init__(self, product_id: int, requested: int, minimum: int) -> None:
+        self.product_id = product_id
+        self.requested = requested
+        self.minimum = minimum
+        super().__init__(
+            f"Product {product_id} has a minimum order quantity of {minimum} "
+            f"(requested {requested})"
+        )
+
+
 # --------------------------------------------------------------------------- #
 # Inventory
 # --------------------------------------------------------------------------- #
@@ -923,6 +1015,14 @@ async def create_order_and_allocate_stock(
         if product is None or not product.is_active:
             raise ProductNotFoundError(payload.product_id)
 
+        # Enforced here rather than in each UI: this is the one path the
+        # website, the bot and the public API all create orders through.
+        minimum = await get_product_min_quantity(session, payload.product_id)
+        if payload.quantity < minimum:
+            raise BelowMinimumQuantityError(
+                payload.product_id, payload.quantity, minimum
+            )
+
         stmt = (
             select(Inventory)
             .where(
@@ -978,6 +1078,14 @@ async def buy_one_with_wallet(
         product = await session.get(Product, product_id)
         if product is None or not product.is_active:
             raise ProductNotFoundError(product_id)
+
+        # This flow buys exactly one item, so a product with a higher
+        # minimum cannot be bought this way. Checked before the balance is
+        # touched — the rollback would undo it anyway, but failing after
+        # taking someone's money is not a sequence worth relying on.
+        minimum = await get_product_min_quantity(session, product_id)
+        if minimum > 1:
+            raise BelowMinimumQuantityError(product_id, 1, minimum)
 
         await spend_user_balance(session, user_id, product.price)
 
