@@ -60,6 +60,11 @@
           </button>
 
         {% elif o.status.value == "waiting_sms" %}
+          {# Placeholder shaped like the code box, so the layout does not
+             jump when the real code lands. #}
+          <p class="eyebrow">Your SMS code</p>
+          <div class="otp-skeleton skeleton" aria-hidden="true"></div>
+
           <div class="status status-waiting" role="status" aria-live="polite">
             <span class="spinner" aria-hidden="true"></span>
             <span>Waiting for the SMS code…</span>

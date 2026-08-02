@@ -239,6 +239,48 @@ async def not_found_handler(
 
 
 # --------------------------------------------------------------------------- #
+# Branded HTML error pages
+# --------------------------------------------------------------------------- #
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.responses import Response as _Response
+
+from app.webshop.routes import render_error as _render_error
+
+
+def _wants_html(request: Request) -> bool:
+    """True only for a browser navigating the storefront.
+
+    Machine clients must keep the JSON envelope they are documented to
+    receive, so /api/ is excluded outright and everything else has to ask
+    for HTML explicitly — curl's ``Accept: */*`` does not qualify.
+    """
+    if request.url.path.startswith("/api/"):
+        return False
+    return "text/html" in request.headers.get("accept", "")
+
+
+@app.exception_handler(StarletteHTTPException)
+async def html_http_exception_handler(
+    request: Request, exc: StarletteHTTPException
+) -> _Response:
+    """Render 4xx/5xx as a styled page for browsers, JSON for everyone else.
+
+    Status codes are passed through unchanged — in particular the internal
+    endpoints still answer 404 so their existence stays hidden.
+    """
+    if _wants_html(request):
+        try:
+            return await _render_error(request, exc.status_code)
+        except Exception:  # noqa: BLE001 — fall back rather than 500 twice
+            logging.getLogger(__name__).exception("error page failed to render")
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+        headers=getattr(exc, "headers", None),
+    )
+
+
+# --------------------------------------------------------------------------- #
 # Users
 # --------------------------------------------------------------------------- #
 @app.post(

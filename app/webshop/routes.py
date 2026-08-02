@@ -103,6 +103,68 @@ async def _render(request: Request, template: str, **context) -> HTMLResponse:
     )
 
 
+_ERROR_COPY: dict[int, tuple[str, str]] = {
+    404: (
+        "Page not found",
+        "That link does not lead anywhere. The product may have been "
+        "removed, or the address may be mistyped.",
+    ),
+    403: (
+        "Not available",
+        "You do not have access to this page.",
+    ),
+    429: (
+        "Too many requests",
+        "You have made a lot of requests in a short time. Wait a moment "
+        "and try again.",
+    ),
+    500: (
+        "Something went wrong",
+        "That is on us, not on you. Nothing was charged. Please try again "
+        "in a moment.",
+    ),
+}
+
+# Fallbacks for codes with no specific copy. A 4xx is the request's fault
+# and a 5xx is ours, so they must not share the 500 wording — telling
+# someone "nothing was charged" on an unrelated 4xx is a false promise.
+_ERROR_FALLBACK: dict[int, tuple[str, str]] = {
+    4: ("Something isn't right", "We could not complete that request."),
+    5: (
+        "Service unavailable",
+        "Something on our side is not responding. Please try again shortly.",
+    ),
+}
+
+
+async def render_error(request: Request, code: int) -> HTMLResponse:
+    """Branded HTML error page. Presentation only — no business logic.
+
+    Used by the app-level handler in ``app.api.main`` for browser requests;
+    API clients keep the JSON envelope. Deliberately tolerant: an error
+    page that raises while rendering is worse than a plain one, so the
+    bot-username lookup (a Telegram round-trip on first call) is allowed
+    to fail.
+    """
+    heading, message = _ERROR_COPY.get(
+        code, _ERROR_FALLBACK.get(code // 100, _ERROR_FALLBACK[5])
+    )
+    try:
+        bot_username = await _get_bot_username()
+    except Exception:  # noqa: BLE001 — never let the error page itself fail
+        bot_username = ""
+    response = await _render(
+        request,
+        "error.html",
+        code=code,
+        heading=heading,
+        message=message,
+        bot_username=bot_username,
+    )
+    response.status_code = code
+    return response
+
+
 # --------------------------------------------------------------------------- #
 # Auth
 # --------------------------------------------------------------------------- #

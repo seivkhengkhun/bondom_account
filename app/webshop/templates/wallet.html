@@ -28,11 +28,23 @@
   </p>
 
   <div class="narrow stack-lg">
-    <div class="card card-lg">
+    <div class="balance-card">
       <span class="eyebrow">Wallet balance</span>
-      <p class="balance-amount price-xl" style="margin-block:var(--sp-2) var(--sp-1)">${{ balance }}</p>
-      <p class="muted text-sm">Spendable everywhere — website, SMS numbers and
+      <p class="balance-amount">${{ balance }}</p>
+      <p class="text-sm">Spendable everywhere — website, SMS numbers and
         the Telegram bot.</p>
+      {% if sms_enabled %}
+        <div class="row" style="margin-top:var(--sp-2)">
+          <a class="btn btn-primary btn-sm" href="/sms">
+            <svg class="ic ic-sm" aria-hidden="true"><use href="#i-phone"/></svg>
+            Spend on SMS numbers
+          </a>
+        </div>
+      {% endif %}
+    </div>
+
+    <div class="card card-lg">
+      <h2 class="section-title" style="font-size:var(--fs-lg);margin-bottom:var(--sp-4)">Add funds</h2>
 
       {% if success %}
         <p class="alert alert-ok" role="status" style="margin-top:var(--sp-4)">
@@ -48,7 +60,7 @@
       {% endif %}
 
       <form method="post" action="/web/wallet/topup" id="topup-form"
-            class="stack" style="margin-top:var(--sp-5)">
+            class="stack">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <div class="field">
           <label class="label" for="amount">Top-up amount</label>

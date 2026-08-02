@@ -11,7 +11,18 @@
       <li id="step-done"><span class="step-dot">3</span>Delivered</li>
     </ol>
 
-    <div class="card card-lg" style="text-align:center">
+    <div class="card card-lg card-accent" style="text-align:center">
+      <div class="pay-head">
+        <div>
+          <span class="eyebrow">Order</span>
+          <p class="pay-order">#{{ order.id }}</p>
+        </div>
+        <div style="text-align:right">
+          <span class="eyebrow">Amount due</span>
+          <p class="price price-lg">${{ order.total_price }}</p>
+        </div>
+      </div>
+
       {% with reference = "Order #" ~ order.id %}
         {% include "_khqr_card.html" %}
       {% endwith %}

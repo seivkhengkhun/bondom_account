@@ -1,29 +1,56 @@
 {% extends "base.html" %}
 {% block content %}
+  {% set total = grouped.values() | map('length') | sum %}
+  {% set in_stock = grouped.values() | sum(start=[]) | selectattr('available', 'gt', 0) | list | length %}
+
   <section class="hero">
-    <h1>Premium digital accounts,
-      <span class="hero-gradient">delivered in seconds</span></h1>
-    <p class="hero-sub">Scan one KHQR with any Cambodian banking app. Your items
-      arrive instantly — here and in your Telegram chat.</p>
-
-    <ul class="trust-row">
-      <li><svg class="ic ic-sm" aria-hidden="true"><use href="#i-bolt"/></svg> Instant delivery</li>
-      <li><svg class="ic ic-sm" aria-hidden="true"><use href="#i-qr"/></svg> KHQR — every bank</li>
-      <li><svg class="ic ic-sm" aria-hidden="true"><use href="#i-shield"/></svg> Warranty included</li>
-      <li><svg class="ic ic-sm ic-tg" aria-hidden="true"><use href="#i-tg"/></svg> Synced with Telegram</li>
-    </ul>
-
-    {% if error %}
-      <p class="alert alert-error" role="alert" style="max-width:32rem">
-        <svg class="ic" aria-hidden="true"><use href="#i-alert"/></svg>
-        <span>{{ error }}</span>
+    <div class="hero-copy">
+      <p class="eyebrow">
+        <svg class="ic ic-sm" aria-hidden="true"><use href="#i-sparkle"/></svg>
+        Cambodia&rsquo;s digital account store
       </p>
-    {% endif %}
+      <h1>Premium accounts,
+        <span class="hero-gradient">delivered in seconds</span></h1>
+      <p class="hero-sub">Scan one KHQR with any Cambodian banking app. Your items
+        arrive instantly — here and in your Telegram chat.</p>
+
+      <ul class="trust-row">
+        <li><svg class="ic ic-sm" aria-hidden="true"><use href="#i-bolt"/></svg> Instant delivery</li>
+        <li><svg class="ic ic-sm" aria-hidden="true"><use href="#i-qr"/></svg> KHQR — every bank</li>
+        <li><svg class="ic ic-sm" aria-hidden="true"><use href="#i-shield"/></svg> Warranty included</li>
+        <li><svg class="ic ic-sm ic-tg" aria-hidden="true"><use href="#i-tg"/></svg> Synced with Telegram</li>
+      </ul>
+
+      <div class="hero-actions">
+        <a class="btn btn-primary btn-lg" href="#catalog">
+          <svg class="ic ic-sm" aria-hidden="true"><use href="#i-bag"/></svg>
+          Browse the catalog
+        </a>
+        {% if sms_enabled %}
+          <a class="btn btn-outline btn-lg" href="/sms">
+            <svg class="ic ic-sm" aria-hidden="true"><use href="#i-phone"/></svg>
+            SMS numbers
+          </a>
+        {% endif %}
+      </div>
+
+      {% if error %}
+        <p class="alert alert-error" role="alert" style="max-width:32rem">
+          <svg class="ic" aria-hidden="true"><use href="#i-alert"/></svg>
+          <span>{{ error }}</span>
+        </p>
+      {% endif %}
+    </div>
 
     {% if not session_user %}
+      {# Signed out: the strongest position on the page belongs to sign-in. #}
       <div class="signin-panel" id="signin">
-        <p>Sign in once with Telegram — your wallet and orders stay in sync
-          across the website and the bot.</p>
+        <span class="empty-icon" aria-hidden="true">
+          <svg class="ic ic-tg"><use href="#i-tg"/></svg>
+        </span>
+        <h2 style="font-size:var(--fs-lg)">Sign in with Telegram</h2>
+        <p>One tap — no password. Your wallet and orders stay in sync across
+          the website and the bot.</p>
         <script async src="https://telegram.org/js/telegram-widget.js?22"
                 data-telegram-login="{{ bot_username }}"
                 data-size="large"
@@ -36,29 +63,100 @@
           </p>
         {% endif %}
       </div>
+    {% else %}
+      {# Signed in: sign-in would be noise, so the slot shows the catalogue
+         at a glance instead. #}
+      <div class="hero-panel">
+        <div class="hero-panel-head">
+          <h2 style="font-size:var(--fs-lg)">In the store today</h2>
+          <span class="badge badge-ok"><span class="dot dot-live"></span>Live</span>
+        </div>
+
+        <div class="stat-strip">
+          <div class="stat">
+            <span class="stat-value">{{ total }}</span>
+            <span class="stat-label">Products</span>
+          </div>
+          <div class="stat">
+            <span class="stat-value">{{ in_stock }}</span>
+            <span class="stat-label">In stock</span>
+          </div>
+          <div class="stat">
+            <span class="stat-value">{{ grouped | length }}</span>
+            <span class="stat-label">Categories</span>
+          </div>
+        </div>
+
+        <ul class="how-steps how-steps-stacked">
+          <li class="how-step">
+            <span class="how-num">1</span>
+            <div>
+              <h3>Pick an item</h3>
+              <p>Choose a product and quantity from the catalog below.</p>
+            </div>
+          </li>
+          <li class="how-step">
+            <span class="how-num">2</span>
+            <div>
+              <h3>Scan the KHQR</h3>
+              <p>Any Cambodian banking app — ABA, ACLEDA, Wing, Bakong.</p>
+            </div>
+          </li>
+          <li class="how-step">
+            <span class="how-num">3</span>
+            <div>
+              <h3>Get it instantly</h3>
+              <p>Delivered on screen and to your Telegram chat.</p>
+            </div>
+          </li>
+        </ul>
+      </div>
     {% endif %}
   </section>
 
-  <section aria-labelledby="catalog-heading">
-    <h2 id="catalog-heading" class="sr-only">Product catalog</h2>
+  <section aria-labelledby="catalog-heading" id="catalog">
+    <div class="section-head">
+      <div>
+        <h2 id="catalog-heading" class="section-title">Catalog</h2>
+        <p class="section-sub">Every item is delivered automatically the moment payment confirms.</p>
+      </div>
+    </div>
 
-    {% set total = grouped.values() | map('length') | sum %}
-    <div class="filter-bar" role="tablist" aria-label="Product categories">
-      <button class="pill" data-cat="*" role="tab" aria-selected="true">
-        All <span class="pill-count">{{ total }}</span>
-      </button>
-      {% for category, items in grouped.items() %}
-        <button class="pill" data-cat="{{ category }}" role="tab" aria-selected="false">
-          {{ category }} <span class="pill-count">{{ items | length }}</span>
+    <div class="catalog-toolbar">
+      <div class="search-field">
+        <svg class="ic ic-search" aria-hidden="true"><use href="#i-search"/></svg>
+        <label class="sr-only" for="catalog-search">Search products</label>
+        <input class="input" id="catalog-search" type="search" autocomplete="off"
+               placeholder="Search products…" enterkeyhint="search">
+        <button class="search-clear" id="catalog-search-clear" type="button"
+                aria-label="Clear search" hidden>
+          <svg class="ic ic-sm" aria-hidden="true"><use href="#i-close"/></svg>
         </button>
-      {% endfor %}
+      </div>
+
+      <div class="filter-bar" role="tablist" aria-label="Product categories">
+        <button class="pill" data-cat="*" role="tab" aria-selected="true">
+          All <span class="pill-count">{{ total }}</span>
+        </button>
+        {% for category, items in grouped.items() %}
+          <button class="pill" data-cat="{{ category }}" role="tab" aria-selected="false">
+            {{ category }} <span class="pill-count">{{ items | length }}</span>
+          </button>
+        {% endfor %}
+      </div>
+
+      <p class="catalog-count" id="catalog-count" aria-live="polite">
+        {{ total }} item{{ '' if total == 1 else 's' }}
+      </p>
     </div>
 
     <div class="grid" id="product-grid">
       {% for category, items in grouped.items() %}
         {% for o in items %}
           <a class="card card-interactive product-card reveal"
-             href="/p/{{ o.product.id }}" data-cat="{{ category }}">
+             href="/p/{{ o.product.id }}"
+             data-cat="{{ category }}"
+             data-name="{{ o.product.name | lower }} {{ category | lower }}">
             <div class="pc-top">
               <span class="chip">{{ category }}</span>
               {% if show_stock %}
@@ -70,10 +168,13 @@
               {% endif %}
             </div>
 
-            <h3>{{ o.product.name }}</h3>
+            <div class="pc-head">
+              <span class="pc-media" aria-hidden="true">{{ o.product.name | trim | first }}</span>
+              <h3>{{ o.product.name }}</h3>
+            </div>
 
             {% if o.product.warranty_days %}
-              <span class="badge">
+              <span class="badge badge-brand">
                 <svg class="ic ic-sm" aria-hidden="true"><use href="#i-shield"/></svg>
                 {{ o.product.warranty_days }}-day warranty
               </span>
@@ -92,10 +193,48 @@
     </div>
 
     <div class="empty-state" id="empty-msg" hidden>
-      <span class="empty-icon"><svg class="ic" aria-hidden="true"><use href="#i-bag"/></svg></span>
-      <h3>Nothing in this category yet</h3>
-      <p class="muted">Try another category — new stock is added regularly.</p>
+      <span class="empty-icon"><svg class="ic" aria-hidden="true"><use href="#i-search"/></svg></span>
+      <h3>No products match</h3>
+      <p class="muted">Try a different search or category — new stock is added regularly.</p>
+      <button class="btn btn-outline btn-sm" type="button" id="reset-filters">
+        <svg class="ic ic-sm" aria-hidden="true"><use href="#i-refresh"/></svg>
+        Clear filters
+      </button>
     </div>
+  </section>
+
+  <section class="how-band reveal" aria-labelledby="how-heading">
+    <h2 id="how-heading" class="section-title">Buying takes under a minute</h2>
+    <ul class="how-steps">
+      <li class="how-step">
+        <span class="how-num">1</span>
+        <div>
+          <h3>Choose</h3>
+          <p>Pick a product and quantity. The price you see is the price you pay.</p>
+        </div>
+      </li>
+      <li class="how-step">
+        <span class="how-num">2</span>
+        <div>
+          <h3>Pay by KHQR</h3>
+          <p>Scan with ABA, ACLEDA, Wing, Bakong or any Cambodian banking app.</p>
+        </div>
+      </li>
+      <li class="how-step">
+        <span class="how-num">3</span>
+        <div>
+          <h3>Receive</h3>
+          <p>Your credentials appear on screen the second the payment confirms.</p>
+        </div>
+      </li>
+      <li class="how-step">
+        <span class="how-num">4</span>
+        <div>
+          <h3>Keep a copy</h3>
+          <p>Everything is mirrored to your Telegram chat and to My Orders.</p>
+        </div>
+      </li>
+    </ul>
   </section>
 {% endblock %}
 
@@ -103,23 +242,54 @@
 <script>
   (function () {
     var pills = document.querySelectorAll(".filter-bar .pill");
-    var cards = document.querySelectorAll(".product-card");
+    var cards = Array.prototype.slice.call(document.querySelectorAll(".product-card"));
     var empty = document.getElementById("empty-msg");
+    var count = document.getElementById("catalog-count");
+    var search = document.getElementById("catalog-search");
+    var clear = document.getElementById("catalog-search-clear");
+    var reset = document.getElementById("reset-filters");
+    var cat = "*";
+
+    /* Category and search are one filter applied together, so switching
+       category never silently discards what was typed. */
+    function apply() {
+      var q = (search.value || "").trim().toLowerCase();
+      var shown = 0;
+      cards.forEach(function (card) {
+        var show =
+          (cat === "*" || card.dataset.cat === cat) &&
+          (q === "" || (card.dataset.name || "").indexOf(q) !== -1);
+        card.hidden = !show;
+        if (show) shown++;
+      });
+      empty.hidden = shown > 0;
+      count.textContent = shown + (shown === 1 ? " item" : " items");
+      clear.hidden = q === "";
+    }
 
     pills.forEach(function (pill) {
       pill.addEventListener("click", function () {
         pills.forEach(function (p) { p.setAttribute("aria-selected", "false"); });
         pill.setAttribute("aria-selected", "true");
-
-        var cat = pill.dataset.cat;
-        var shown = 0;
-        cards.forEach(function (card) {
-          var show = cat === "*" || card.dataset.cat === cat;
-          card.hidden = !show;
-          if (show) shown++;
-        });
-        empty.hidden = shown > 0;
+        cat = pill.dataset.cat;
+        apply();
       });
+    });
+
+    search.addEventListener("input", apply);
+    search.addEventListener("search", apply);
+    clear.addEventListener("click", function () {
+      search.value = "";
+      search.focus();
+      apply();
+    });
+    reset.addEventListener("click", function () {
+      search.value = "";
+      cat = "*";
+      pills.forEach(function (p) {
+        p.setAttribute("aria-selected", String(p.dataset.cat === "*"));
+      });
+      apply();
     });
   })();
 </script>

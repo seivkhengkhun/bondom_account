@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="description" content="Bondom Account — premium digital accounts with instant delivery. Pay with KHQR from any Cambodian banking app.">
   <meta name="color-scheme" content="light dark">
-  <meta name="theme-color" content="#f7f8fa" media="(prefers-color-scheme: light)">
-  <meta name="theme-color" content="#0d1016" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#f8f6f2" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#100f0e" media="(prefers-color-scheme: dark)">
   <title>{% block title %}Bondom Account — Digital Store{% endblock %}</title>
 
   {# Applied before first paint so a stored theme never flashes the wrong one. #}
@@ -24,7 +24,7 @@
   {# ?v= busts the browser cache on every deploy — see _asset_version(). #}
   <link rel="stylesheet" href="/web/static/shop.css?v={{ asset_v }}">
   <link rel="preconnect" href="https://telegram.org">
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%234f46e5'/><path d='M9 11h14l-1.4 11.2a2 2 0 0 1-2 1.8h-7.2a2 2 0 0 1-2-1.8L9 11Zm3.2 0a3.8 3.8 0 0 1 7.6 0' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/></svg>">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'><stop offset='0' stop-color='%238b2fd6'/><stop offset='.45' stop-color='%23a855f7'/><stop offset='1' stop-color='%23f0568c'/></linearGradient></defs><rect width='32' height='32' rx='8' fill='url(%23g)'/><path d='M9 11h14l-1.4 11.2a2 2 0 0 1-2 1.8h-7.2a2 2 0 0 1-2-1.8L9 11Zm3.2 0a3.8 3.8 0 0 1 7.6 0' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/></svg>">
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
@@ -56,6 +56,10 @@
     <symbol id="i-refresh" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11.5A8 8 0 0 0 6.3 6.3L3.5 9"/><path d="M4 12.5a8 8 0 0 0 13.7 5.2l2.8-2.7"/><path d="M3.5 4.5V9H8M20.5 19.5V15H16"/></symbol>
     <symbol id="i-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></symbol>
     <symbol id="i-logout" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M15 4.5h3A1.5 1.5 0 0 1 19.5 6v12a1.5 1.5 0 0 1-1.5 1.5h-3"/><path d="M10 8.5 6.5 12l3.5 3.5M6.5 12H15"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.3-4.3"/></symbol>
+    <symbol id="i-sparkle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.2 13.9 9 20 10.8 13.9 12.7 12 18.5 10.1 12.7 4 10.8 10.1 9 12 3.2Z"/><path d="M18.5 3v3M20 4.5h-3"/></symbol>
+    <symbol id="i-code" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="m8.5 8-4 4 4 4M15.5 8l4 4-4 4"/></symbol>
+    <symbol id="i-home" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10.6 12 4l8 6.6"/><path d="M6 9.8V19a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V9.8"/></symbol>
   </svg>
 
   {% set path = request.url.path %}
@@ -146,24 +150,32 @@
 
   <footer class="footer">
     <div class="footer-inner">
-      <div>
-        <a class="brand" href="/" style="margin-bottom:var(--sp-2)">
+      <div class="footer-lead">
+        <a class="brand" href="/">
           <span class="brand-mark" aria-hidden="true"><svg class="ic" style="width:1.05rem;height:1.05rem"><use href="#i-bag"/></svg></span>
           <span class="brand-name">Bondom<b>Account</b></span>
         </a>
-        <p class="muted">Premium digital accounts, delivered automatically the moment payment confirms.</p>
+        <p class="muted">Premium digital accounts and SMS verification numbers,
+          delivered automatically the moment payment confirms.</p>
+        <p class="footer-pay">
+          <svg class="ic ic-sm" aria-hidden="true"><use href="#i-qr"/></svg>
+          KHQR from ABA, ACLEDA, Wing, Bakong and every Cambodian banking app.
+        </p>
+        <a class="btn btn-outline btn-sm" href="https://t.me/{{ bot_username }}">
+          <svg class="ic ic-sm ic-tg" aria-hidden="true"><use href="#i-tg"/></svg>
+          @{{ bot_username }}
+        </a>
       </div>
       <div>
         <p class="footer-title">Shop</p>
         <ul class="stack-sm">
           <li><a href="/">Catalog</a></li>
           {% if sms_enabled %}<li><a href="/sms">SMS Numbers</a></li>{% endif %}
-          {% if session_user %}<li><a href="/my/orders">My Orders</a></li>{% endif %}
+          {% if session_user %}
+            <li><a href="/my/orders">My Orders</a></li>
+            <li><a href="/wallet">Wallet</a></li>
+          {% endif %}
         </ul>
-      </div>
-      <div>
-        <p class="footer-title">Payments</p>
-        <p class="muted">KHQR accepted from ABA, ACLEDA, Wing, Bakong and every Cambodian banking app.</p>
       </div>
       <div>
         <p class="footer-title">Legal</p>
@@ -181,15 +193,10 @@
           <li><a href="/developer">API keys</a></li>
         </ul>
       </div>
-      <div>
-        <p class="footer-title">Support</p>
-        <p><a href="https://t.me/{{ bot_username }}">
-          <svg class="ic ic-sm ic-tg" aria-hidden="true"><use href="#i-tg"/></svg>
-          @{{ bot_username }}</a></p>
-      </div>
     </div>
     <div class="footer-bottom">
-      <p>&copy; {{ now_year or 2026 }} Bondom Account. All rights reserved. <a href="/legal/terms">Terms</a> &middot; <a href="/legal/privacy">Privacy</a> &middot; <a href="/legal/cookies">Cookies</a></p>
+      <p>&copy; {{ now_year or 2026 }} Bondom Account. All rights reserved.</p>
+      <p><a href="/legal/terms">Terms</a> &middot; <a href="/legal/privacy">Privacy</a> &middot; <a href="/legal/cookies">Cookies</a></p>
     </div>
   </footer>
 

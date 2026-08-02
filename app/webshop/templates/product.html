@@ -11,8 +11,13 @@
 
   <div class="product-layout">
     <section class="card card-lg product-info">
-      <span class="chip">{{ o.product.category }}</span>
-      <h1>{{ o.product.name }}</h1>
+      <div class="product-title">
+        <span class="pc-media pc-media-lg" aria-hidden="true">{{ o.product.name | trim | first }}</span>
+        <div>
+          <span class="chip">{{ o.product.category }}</span>
+          <h1>{{ o.product.name }}</h1>
+        </div>
+      </div>
 
       <div class="meta-row">
         {% if show_stock %}
@@ -62,7 +67,7 @@
       </ul>
     </section>
 
-    <aside class="card card-lg buy-panel" aria-label="Purchase">
+    <aside class="card card-lg card-accent buy-panel" aria-label="Purchase">
       <p class="price price-xl">${{ o.product.price }}<span class="price-unit"> / item</span></p>
 
       {% if error %}
@@ -107,9 +112,16 @@
               <svg class="ic" aria-hidden="true"><use href="#i-qr"/></svg>
               Pay with KHQR
             </button>
-            <p class="field-hint" style="text-align:center;margin-top:var(--sp-3)">
-              You will see a QR code on the next screen.
-            </p>
+            <ul class="assurance-list">
+              <li>
+                <svg class="ic ic-sm" aria-hidden="true"><use href="#i-qr"/></svg>
+                You will see a QR code on the next screen.
+              </li>
+              <li>
+                <svg class="ic ic-sm" aria-hidden="true"><use href="#i-bolt"/></svg>
+                Nothing is charged until you scan it.
+              </li>
+            </ul>
           </form>
         {% else %}
           <div class="empty-state" style="padding:var(--sp-6) 0">
