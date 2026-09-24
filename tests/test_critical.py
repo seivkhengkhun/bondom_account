@@ -650,6 +650,32 @@ async def test_pandora_client_reads_every_cursor_page(monkeypatch):
     assert calls == [None, "page-2"]
 
 
+@pytest.mark.asyncio
+async def test_pandora_catalog_syncs_are_serialized(monkeypatch):
+    from shared import pandora
+
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+    starts = []
+
+    async def fake_sync(client=None):
+        starts.append(client)
+        if len(starts) == 1:
+            first_started.set()
+            await release_first.wait()
+        return client
+
+    monkeypatch.setattr(pandora, "_sync_catalog_once", fake_sync)
+    first = asyncio.create_task(pandora.sync_catalog("first"))
+    await first_started.wait()
+    second = asyncio.create_task(pandora.sync_catalog("second"))
+    await asyncio.sleep(0)
+    assert starts == ["first"]
+    release_first.set()
+    assert await asyncio.gather(first, second) == ["first", "second"]
+    assert starts == ["first", "second"]
+
+
 def test_pandora_pricing_modes_are_decimal_exact():
     from shared.models import SupplierPricingMode, SupplierSettings
     from shared.pandora import calculate_retail_price

@@ -357,7 +357,16 @@ def calculate_retail_price(
     return retail, _money(retail - supplier_price)
 
 
+_catalog_sync_lock = asyncio.Lock()
+
+
 async def sync_catalog(client: PandoraClient | None = None) -> SupplierSyncRun:
+    """Serialize scheduled/manual syncs so their completion tokens cannot race."""
+    async with _catalog_sync_lock:
+        return await _sync_catalog_once(client)
+
+
+async def _sync_catalog_once(client: PandoraClient | None = None) -> SupplierSyncRun:
     """Fetch every page first, then atomically apply a complete catalog."""
     client = client or PandoraClient()
     token = uuid.uuid4().hex
