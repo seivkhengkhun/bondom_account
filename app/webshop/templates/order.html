@@ -7,7 +7,7 @@
     <span class="current">Order #{{ order.id }}</span>
   </nav>
 
-  {% if order.status.value in ("delivered", "paid") %}
+  {% if order.status.value == "delivered" %}
     <div class="success-banner" role="status">
       <span class="success-mark" aria-hidden="true">
         <svg class="ic" aria-hidden="true"><use href="#i-check"/></svg>
@@ -72,6 +72,29 @@
         {% endif %}
       </section>
     {% endfor %}
+
+  {% elif order.status.value == "paid" %}
+    <div class="card card-lg narrow">
+      <div class="empty-state" style="padding-block:var(--sp-6)">
+        <span class="empty-icon" style="color:var(--warn)">
+          <svg class="ic" aria-hidden="true"><use href="#i-clock"/></svg>
+        </span>
+        <h1 style="font-size:var(--fs-lg)">
+          {% if fulfillment and fulfillment.status.value in ('failed', 'refunded', 'review') %}
+            Fulfillment needs attention
+          {% else %}
+            Payment received
+          {% endif %}
+        </h1>
+        <p class="muted">
+          {% if fulfillment and fulfillment.status.value in ('failed', 'refunded', 'review') %}
+            Your payment is preserved. Support has been notified and no additional charge will be made.
+          {% else %}
+            Order #{{ order.id }} is being fulfilled. Your items will appear here after the supplier confirms delivery.
+          {% endif %}
+        </p>
+      </div>
+    </div>
 
   {% elif order.status.value == "pending" %}
     <div class="card card-lg narrow">

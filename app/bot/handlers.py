@@ -25,7 +25,7 @@ from aiogram.types import (
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from shared import payment_limits, payment_service, services, sms_service
+from shared import pandora, payment_limits, payment_service, services, sms_service
 from shared.config import settings
 from shared.database import AsyncSessionLocal
 from shared.models import Order, OrderStatus, Product, SmsOrderStatus
@@ -237,6 +237,8 @@ async def _product_card(
 
     lines = [f"📦 <b>{html.escape(product.name)}</b>", ""]
     lines.append(f"💵 Price: <b>${product.price}</b>")
+    if selected.description:
+        lines.extend(["", html.escape(selected.description)])
     if product.warranty_days:
         lines.append(f"🛡 Warranty: {product.warranty_days} days")
     if show_stock:
@@ -985,14 +987,29 @@ async def cb_wallet_buy_one(callback: CallbackQuery) -> None:
         except services.OutOfStockError:
             await callback.answer("Out of stock.", show_alert=True)
             return
+        except services.BelowMinimumQuantityError as exc:
+            await callback.answer(
+                f"Minimum order is {exc.minimum}. Use the regular Buy flow.",
+                show_alert=True,
+            )
+            return
         except services.ProductNotFoundError:
             await callback.answer("Product not available.", show_alert=True)
             return
+        except pandora.PandoraError as exc:
+            await callback.answer(str(exc), show_alert=True)
+            return
 
-        await services.mark_order_delivered(session, order.id)
+        fulfillment = await pandora.fulfill_paid_order(session, order.id)
         order = await services.get_order_with_items(session, order.id)
         balance = await services.get_user_balance(session, user.id)
 
+    if fulfillment is not None and order.status is not OrderStatus.DELIVERED:
+        await callback.answer(
+            f"Payment received. Supplier fulfillment is pending. Balance: ${balance:.2f}",
+            show_alert=True,
+        )
+        return
     await _deliver_order_to_chat(callback.message.bot, callback.message.chat.id, order)
     await callback.answer(f"✅ Purchased with wallet. Balance: ${balance:.2f}")
 
@@ -1146,6 +1163,10 @@ async def msg_buy_quantity(message: Message, state: FSMContext) -> None:
             )
             await state.clear()
             return
+        except pandora.PandoraError as exc:
+            await message.answer(f"Supplier unavailable: {html.escape(str(exc))}")
+            await state.clear()
+            return
 
         try:
             payment = await payment_service.create_payment_session(
@@ -1259,7 +1280,17 @@ async def cb_check_payment(callback: CallbackQuery) -> None:
             )
             return
 
-        await services.mark_order_delivered(session, order_id)
+        fulfillment = await pandora.fulfill_paid_order(session, order_id)
+        if fulfillment is not None:
+            order = await services.get_order_with_items(session, order_id)
+            if order.status is not OrderStatus.DELIVERED:
+                await callback.answer(
+                    "✅ Payment received. Supplier fulfillment is in progress.",
+                    show_alert=True,
+                )
+                return
+        else:
+            await services.mark_order_delivered(session, order_id)
         order = await services.get_order_with_items(session, order_id)
         await _deliver_order(callback, order)
 
@@ -1343,10 +1374,23 @@ async def _watch_payment_and_auto_deliver(
             logger.info("Auto-delivery skipped: order %s canceled", order_id)
             return
 
-        await services.mark_order_delivered(session, order_id)
+        fulfillment = await pandora.fulfill_paid_order(session, order_id)
+        if fulfillment is None:
+            await services.mark_order_delivered(session, order_id)
         order = await services.get_order_with_items(session, order_id)
 
-    await _deliver_order_to_chat(bot, chat_id, order)
+    if order.status is OrderStatus.DELIVERED:
+        await _deliver_order_to_chat(bot, chat_id, order)
+    else:
+        try:
+            await bot.send_message(
+                chat_id,
+                f"✅ Payment confirmed for order #{order_id}. "
+                "Supplier fulfillment is in progress; the items will remain "
+                "available in My Orders once delivered.",
+            )
+        except Exception:
+            logger.exception("Failed to send fulfillment notice for order %s", order_id)
 
 
 async def _deliver_order(callback: CallbackQuery, order: Order) -> None:

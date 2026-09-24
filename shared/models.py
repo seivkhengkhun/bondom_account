@@ -15,6 +15,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -53,6 +54,24 @@ class SmsOrderStatus(str, enum.Enum):
     COMPLETED = "completed"
     REFUNDED = "refunded"
     FAILED = "failed"
+
+
+class SupplierPricingMode(str, enum.Enum):
+    GLOBAL_DEFAULT = "GLOBAL_DEFAULT"
+    FIXED_PROFIT = "FIXED_PROFIT"
+    PERCENTAGE_MARKUP = "PERCENTAGE_MARKUP"
+    MANUAL_RETAIL_PRICE = "MANUAL_RETAIL_PRICE"
+
+
+class SupplierFulfillmentStatus(str, enum.Enum):
+    AWAITING_PAYMENT = "awaiting_payment"
+    READY = "ready"
+    PENDING = "pending"
+    PROCESSING = "processing"
+    DELIVERED = "delivered"
+    FAILED = "failed"
+    REFUNDED = "refunded"
+    REVIEW = "review"
 
 
 class User(Base):
@@ -357,4 +376,167 @@ class ApiRequestLog(Base):
     ip: Mapped[str] = mapped_column(String(64), default="")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), index=True
+    )
+
+
+# --------------------------------------------------------------------------- #
+# External suppliers — additive tables only; existing product/order rows stay
+# untouched and local-inventory products continue using their original flow.
+# --------------------------------------------------------------------------- #
+class SupplierProduct(Base):
+    """Pandora catalog data mapped permanently to one local Product row.
+
+    Supplier-original fields are kept here. Customer-facing name/category and
+    retail price remain on Product, so administrator edits survive every sync.
+    A nullable customer_description is the local override; when absent the
+    supplier description is displayed.
+    """
+
+    __tablename__ = "supplier_products"
+    __table_args__ = (
+        UniqueConstraint(
+            "supplier", "supplier_product_id", name="uq_supplier_product"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    product_id: Mapped[int] = mapped_column(
+        ForeignKey("products.id", ondelete="RESTRICT"), unique=True, index=True
+    )
+    supplier: Mapped[str] = mapped_column(String(32), default="pandora", index=True)
+    supplier_product_id: Mapped[str] = mapped_column(String(100), index=True)
+    supplier_name: Mapped[str] = mapped_column(String(255))
+    supplier_description: Mapped[str] = mapped_column(Text, default="")
+    supplier_category: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    customer_description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    supplier_unit_price: Mapped[Decimal] = mapped_column(Numeric(18, 4))
+    available_stock: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    minimum_quantity: Mapped[int] = mapped_column(Integer, default=1)
+    maximum_quantity: Mapped[int] = mapped_column(Integer, default=1)
+    currency: Mapped[str] = mapped_column(String(3), default="USD")
+    delivery_type: Mapped[str] = mapped_column(String(32), default="instant")
+    supplier_available: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    pricing_mode: Mapped[SupplierPricingMode] = mapped_column(
+        Enum(
+            SupplierPricingMode,
+            name="supplier_pricing_mode",
+            values_callable=lambda e: [m.value for m in e],
+        ),
+        default=SupplierPricingMode.GLOBAL_DEFAULT,
+    )
+    pricing_value: Mapped[Decimal | None] = mapped_column(
+        Numeric(18, 4), nullable=True
+    )
+    blocked_below_min_profit: Mapped[bool] = mapped_column(Boolean, default=False)
+    supplier_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_successful_sync: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    last_seen_sync: Mapped[str] = mapped_column(String(64), default="", index=True)
+
+
+class SupplierSettings(Base):
+    """Single-row durable pricing and fulfillment configuration."""
+
+    __tablename__ = "supplier_settings"
+
+    supplier: Mapped[str] = mapped_column(String(32), primary_key=True)
+    global_pricing_method: Mapped[str] = mapped_column(
+        String(32), default="FIXED_PROFIT"
+    )
+    default_fixed_profit: Mapped[Decimal] = mapped_column(
+        Numeric(18, 4), default=Decimal("1.00")
+    )
+    default_percentage_markup: Mapped[Decimal] = mapped_column(
+        Numeric(10, 4), default=Decimal("30.00")
+    )
+    minimum_gross_profit: Mapped[Decimal] = mapped_column(
+        Numeric(18, 4), default=Decimal("0.00")
+    )
+    sync_interval_minutes: Mapped[int] = mapped_column(Integer, default=15)
+    auto_fulfillment_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class SupplierFulfillment(Base):
+    """Durable, idempotent supplier purchase state for one customer order."""
+
+    __tablename__ = "supplier_fulfillments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    order_id: Mapped[int] = mapped_column(
+        ForeignKey("orders.id", ondelete="RESTRICT"), unique=True, index=True
+    )
+    supplier_product_id: Mapped[int] = mapped_column(
+        ForeignKey("supplier_products.id", ondelete="RESTRICT"), index=True
+    )
+    quantity: Mapped[int] = mapped_column(Integer)
+    retail_unit_price: Mapped[Decimal] = mapped_column(Numeric(18, 2))
+    quoted_supplier_unit_price: Mapped[Decimal] = mapped_column(Numeric(18, 4))
+    quote_id: Mapped[str] = mapped_column(String(100), default="")
+    price_version: Mapped[str] = mapped_column(String(100), default="")
+    idempotency_key: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    request_body: Mapped[str] = mapped_column(Text, default="")
+    supplier_order_id: Mapped[str | None] = mapped_column(
+        String(100), unique=True, nullable=True, index=True
+    )
+    status: Mapped[SupplierFulfillmentStatus] = mapped_column(
+        Enum(
+            SupplierFulfillmentStatus,
+            name="supplier_fulfillment_status",
+            values_callable=lambda e: [m.value for m in e],
+        ),
+        default=SupplierFulfillmentStatus.AWAITING_PAYMENT,
+        index=True,
+    )
+    failure_code: Mapped[str] = mapped_column(String(64), default="")
+    failure_message: Mapped[str] = mapped_column(Text, default="")
+    customer_notified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class SupplierWebhookEvent(Base):
+    __tablename__ = "supplier_webhook_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    supplier: Mapped[str] = mapped_column(String(32), default="pandora", index=True)
+    event_id: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    event_type: Mapped[str] = mapped_column(String(64), default="")
+    raw_payload: Mapped[str] = mapped_column(Text)
+    processed: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    received_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    processed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class SupplierSyncRun(Base):
+    __tablename__ = "supplier_sync_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    supplier: Mapped[str] = mapped_column(String(32), default="pandora", index=True)
+    sync_token: Mapped[str] = mapped_column(String(64), unique=True)
+    status: Mapped[str] = mapped_column(String(32), default="running", index=True)
+    products_seen: Mapped[int] = mapped_column(Integer, default=0)
+    products_created: Mapped[int] = mapped_column(Integer, default=0)
+    products_updated: Mapped[int] = mapped_column(Integer, default=0)
+    error_message: Mapped[str] = mapped_column(Text, default="")
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )

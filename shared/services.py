@@ -23,6 +23,9 @@ from shared.models import (
     OrderStatus,
     Payment,
     Product,
+    SupplierProduct,
+    SupplierFulfillment,
+    SupplierFulfillmentStatus,
     SmsOrder,
     User,
     WalletTopup,
@@ -522,6 +525,10 @@ class ProductOverview(NamedTuple):
     available: int  # stock left to sell
     sold: int  # units already allocated to orders
     revenue: Decimal  # price * sold
+    description: str = ""
+    source: str = "local"
+    minimum_quantity: int = 1
+    maximum_quantity: int = 100
 
 
 class InventoryImportResult(NamedTuple):
@@ -545,7 +552,29 @@ async def list_products_with_stock(
     )
     async with transaction_scope(session):
         result = await session.execute(stmt)
-        return [(product, int(stock)) for product, stock in result.all()]
+        rows = result.all()
+        mappings = {
+            m.product_id: m
+            for m in (
+                await session.scalars(select(SupplierProduct))
+            ).all()
+        }
+        output = []
+        for product, stock in rows:
+            mapping = mappings.get(product.id)
+            if mapping is not None:
+                stock = (
+                    0
+                    if not mapping.supplier_available
+                    or mapping.blocked_below_min_profit
+                    else (
+                        mapping.available_stock
+                        if mapping.available_stock is not None
+                        else mapping.maximum_quantity
+                    )
+                )
+            output.append((product, int(stock)))
+        return output
 
 
 async def list_product_overviews(
@@ -570,12 +599,50 @@ async def list_product_overviews(
     )
     async with transaction_scope(session):
         rows = (await session.execute(stmt)).all()
+        mappings = {
+            m.product_id: m
+            for m in (
+                await session.scalars(select(SupplierProduct))
+            ).all()
+        }
     return [
         ProductOverview(
             product=product,
-            available=int(avail),
+            available=(
+                int(avail)
+                if product.id not in mappings
+                else (
+                    0
+                    if not mappings[product.id].supplier_available
+                    or mappings[product.id].blocked_below_min_profit
+                    else int(
+                        mappings[product.id].available_stock
+                        if mappings[product.id].available_stock is not None
+                        else mappings[product.id].maximum_quantity
+                    )
+                )
+            ),
             sold=int(nsold),
             revenue=product.price * nsold,
+            description=(
+                mappings[product.id].customer_description
+                if product.id in mappings
+                and mappings[product.id].customer_description is not None
+                else (
+                    mappings[product.id].supplier_description
+                    if product.id in mappings
+                    else ""
+                )
+            ),
+            source="pandora" if product.id in mappings else "local",
+            minimum_quantity=(
+                mappings[product.id].minimum_quantity
+                if product.id in mappings else 1
+            ),
+            maximum_quantity=(
+                mappings[product.id].maximum_quantity
+                if product.id in mappings else 100
+            ),
         )
         for product, avail, nsold in rows
     ]
@@ -654,6 +721,15 @@ async def delete_product(session: AsyncSession, product_id: int) -> None:
         product = await session.get(Product, product_id)
         if product is None:
             raise ProductNotFoundError(product_id)
+        supplier_mapping = await session.scalar(
+            select(SupplierProduct.id).where(
+                SupplierProduct.product_id == product_id
+            )
+        )
+        if supplier_mapping is not None:
+            raise ServiceError(
+                "Supplier products cannot be deleted; disable sales instead."
+            )
 
         rows = list(
             (
@@ -822,13 +898,22 @@ async def get_product_min_quantity(
     """
     async with transaction_scope(session):
         row = await session.get(AppSetting, _product_min_qty_key(product_id))
+        supplier_minimum = await session.scalar(
+            select(SupplierProduct.minimum_quantity).where(
+                SupplierProduct.product_id == product_id
+            )
+        )
         if row is None:
-            return DEFAULT_MIN_ORDER_QTY
+            return max(DEFAULT_MIN_ORDER_QTY, int(supplier_minimum or 1))
         try:
             value = int(row.value)
         except (TypeError, ValueError):
-            return DEFAULT_MIN_ORDER_QTY
-    return max(DEFAULT_MIN_ORDER_QTY, min(value, MAX_MIN_ORDER_QTY))
+            return max(DEFAULT_MIN_ORDER_QTY, int(supplier_minimum or 1))
+    return max(
+        DEFAULT_MIN_ORDER_QTY,
+        int(supplier_minimum or 1),
+        min(value, MAX_MIN_ORDER_QTY),
+    )
 
 
 async def get_product_min_quantities(
@@ -1023,6 +1108,46 @@ async def create_order_and_allocate_stock(
                 payload.product_id, payload.quantity, minimum
             )
 
+        supplier_mapping = await session.scalar(
+            select(SupplierProduct).where(
+                SupplierProduct.product_id == payload.product_id
+            )
+        )
+        if supplier_mapping is not None:
+            if (
+                not supplier_mapping.supplier_available
+                or supplier_mapping.blocked_below_min_profit
+            ):
+                raise OutOfStockError(payload.product_id, payload.quantity, 0)
+            if payload.quantity > supplier_mapping.maximum_quantity:
+                raise OutOfStockError(
+                    payload.product_id,
+                    payload.quantity,
+                    supplier_mapping.maximum_quantity,
+                )
+            if (
+                supplier_mapping.available_stock is not None
+                and supplier_mapping.available_stock < payload.quantity
+            ):
+                raise OutOfStockError(
+                    payload.product_id,
+                    payload.quantity,
+                    supplier_mapping.available_stock,
+                )
+            order = Order(
+                user_id=payload.user_id,
+                total_price=product.price * Decimal(payload.quantity),
+                status=OrderStatus.PENDING,
+            )
+            session.add(order)
+            await session.flush()
+            from shared import pandora
+
+            await pandora.prepare_fulfillment(
+                session, order, supplier_mapping, payload.quantity
+            )
+            return order
+
         stmt = (
             select(Inventory)
             .where(
@@ -1059,13 +1184,10 @@ async def create_order_and_allocate_stock(
     return order
 
 
-async def buy_one_with_wallet(
-    session: AsyncSession, user_id: int, product_id: int
+async def buy_with_wallet(
+    session: AsyncSession, user_id: int, product_id: int, quantity: int = 1
 ) -> Order:
-    """One-tap purchase: charge wallet, allocate one stock item, deliverable order.
-
-    This flow is intended for prepaid customers after top-up.
-    """
+    """Atomically create an order and debit its frozen retail total."""
     async with transaction_scope(session):
         user = await session.get(User, user_id)
         if user is None:
@@ -1079,22 +1201,29 @@ async def buy_one_with_wallet(
         if product is None or not product.is_active:
             raise ProductNotFoundError(product_id)
 
-        # This flow buys exactly one item, so a product with a higher
-        # minimum cannot be bought this way. Checked before the balance is
-        # touched — the rollback would undo it anyway, but failing after
-        # taking someone's money is not a sequence worth relying on.
-        minimum = await get_product_min_quantity(session, product_id)
-        if minimum > 1:
-            raise BelowMinimumQuantityError(product_id, 1, minimum)
-
-        await spend_user_balance(session, user_id, product.price)
-
         order = await create_order_and_allocate_stock(
             session,
-            OrderCreate(user_id=user_id, product_id=product_id, quantity=1),
+            OrderCreate(user_id=user_id, product_id=product_id, quantity=quantity),
         )
-        order.status = OrderStatus.DELIVERED
+        # Supplier checkout refreshes the quote and may update the retail
+        # price, so debit the frozen order total rather than the stale card.
+        await spend_user_balance(session, user_id, order.total_price)
+        supplier_order = await session.scalar(
+            select(SupplierFulfillment).where(
+                SupplierFulfillment.order_id == order.id
+            )
+        )
+        order.status = (
+            OrderStatus.PAID if supplier_order is not None else OrderStatus.DELIVERED
+        )
     return order
+
+
+async def buy_one_with_wallet(
+    session: AsyncSession, user_id: int, product_id: int
+) -> Order:
+    """Compatibility wrapper for Telegram's one-tap wallet purchase."""
+    return await buy_with_wallet(session, user_id, product_id, 1)
 
 
 async def get_order_with_items(session: AsyncSession, order_id: int) -> Order:
@@ -1141,6 +1270,16 @@ async def cancel_order_and_release_inventory(
             raise OrderNotFoundError(order_id)
         if order.status is not OrderStatus.PENDING:
             return order
+
+        fulfillment = await session.scalar(
+            select(SupplierFulfillment).where(
+                SupplierFulfillment.order_id == order_id
+            )
+        )
+        if fulfillment is not None:
+            fulfillment.status = SupplierFulfillmentStatus.FAILED
+            fulfillment.failure_code = "CUSTOMER_CANCELED"
+            fulfillment.failure_message = "Canceled before payment"
 
         rows = list(
             (

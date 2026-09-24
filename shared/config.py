@@ -63,6 +63,15 @@ class Settings(BaseSettings):
     sms_api_base: str = "https://angkorphonesms.shop"
     sms_markup_usd: Decimal = Decimal("0.03")
 
+    # Pandora Digital reseller API. Automatic supplier purchasing is
+    # deliberately off until an administrator enables it after testing.
+    pandora_api_key: str = ""
+    pandora_api_base_url: str = "https://api.pandoradigital.shop/api/v1"
+    pandora_sync_enabled: bool = True
+    pandora_sync_interval_minutes: int = 15
+    pandora_auto_fulfillment_enabled: bool = False
+    pandora_webhook_secret: str = ""
+
     model_config = SettingsConfigDict(
         # Use an absolute path so API/bot/admin load the same .env regardless of cwd.
         env_file=str(ENV_FILE),

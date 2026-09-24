@@ -17,10 +17,10 @@ from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from shared import payment_limits, payment_service, services
+from shared import pandora, payment_limits, payment_service, services
 from shared.config import settings
 from shared.database import AsyncSessionLocal
-from shared.models import OrderStatus, Product
+from shared.models import OrderStatus, Product, SupplierFulfillment
 
 from .auth import (
     CSRF_FIELD,
@@ -337,6 +337,10 @@ async def web_buy(
         )
     except services.ProductNotFoundError:
         return RedirectResponse("/?error=Product+unavailable", status_code=303)
+    except pandora.PandoraError as exc:
+        return RedirectResponse(
+            f"/p/{product_id}?error=" + quote_plus(str(exc)), status_code=303
+        )
 
     # Reuse the bot's watcher: auto-confirms, marks delivered, and sends
     # the items to the buyer's Telegram chat when payment arrives.
@@ -419,7 +423,15 @@ async def order_page(request: Request, order_id: int):
         grouped.setdefault(item.product_id, []).append(item.data)
 
     sections = []
+    fulfillment = None
     async with AsyncSessionLocal() as session:
+        from sqlalchemy import select
+
+        fulfillment = await session.scalar(
+            select(SupplierFulfillment).where(
+                SupplierFulfillment.order_id == order_id
+            )
+        )
         for pid, values in grouped.items():
             product = await session.get(Product, pid)
             note = await services.get_product_client_note(session, pid)
@@ -432,7 +444,11 @@ async def order_page(request: Request, order_id: int):
                 }
             )
     return await _render(
-        request, "order.html", order=order, sections=sections
+        request,
+        "order.html",
+        order=order,
+        sections=sections,
+        fulfillment=fulfillment,
     )
 
 

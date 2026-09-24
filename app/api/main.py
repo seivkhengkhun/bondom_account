@@ -49,10 +49,19 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         from shared.sms_service import sweep_waiting_orders
 
         sweep_task = asyncio.create_task(sweep_waiting_orders())
+    pandora_tasks: list[asyncio.Task] = []
+    if settings.pandora_api_key:
+        from shared import pandora
+
+        if settings.pandora_sync_enabled:
+            pandora_tasks.append(asyncio.create_task(pandora.synchronization_loop()))
+        pandora_tasks.append(asyncio.create_task(pandora.reconciliation_loop()))
     yield
     if sweep_task is not None:
         sweep_task.cancel()
     for task in _poll_tasks:
+        task.cancel()
+    for task in pandora_tasks:
         task.cancel()
     await engine.dispose()
 
@@ -131,6 +140,42 @@ app.include_router(developer_router)
 from app.webshop.legal import router as legal_router
 
 app.include_router(legal_router)
+
+
+# Pandora's public callback is intentionally outside /api. nginx may expose
+# this one route while continuing to hide the legacy internal JSON endpoints.
+@app.post("/webhooks/pandora", include_in_schema=False)
+async def pandora_webhook(request: Request) -> JSONResponse:
+    from shared import pandora
+
+    raw = await request.body()
+    event_id = request.headers.get("Webhook-Id", "")
+    timestamp = request.headers.get("Webhook-Timestamp", "")
+    signature = request.headers.get("Webhook-Signature", "")
+    if not event_id or not pandora.verify_webhook_signature(
+        raw, timestamp, signature, settings.pandora_webhook_secret
+    ):
+        return JSONResponse({"detail": "Invalid webhook signature"}, status_code=401)
+    try:
+        parsed = __import__("json").loads(raw)
+        event_type = str(parsed.get("type") or "") if isinstance(parsed, dict) else ""
+    except (ValueError, UnicodeDecodeError):
+        event_type = ""
+    async with _Session() as session:
+        _, created = await pandora.persist_webhook_event(
+            session, event_id, event_type, raw
+        )
+    if created:
+        async def _process() -> None:
+            # Pandora does not publish an event-body schema. Reconcile every
+            # pending local fulfillment and trust authenticated GET /orders.
+            await pandora.reconcile_fulfillments()
+            await pandora.mark_webhook_processed(event_id)
+
+        task = asyncio.create_task(_process())
+        _poll_tasks.add(task)
+        task.add_done_callback(_poll_tasks.discard)
+    return JSONResponse({"accepted": True, "duplicate": not created})
 
 
 @app.exception_handler(ApiError)

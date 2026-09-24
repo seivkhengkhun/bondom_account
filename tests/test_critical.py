@@ -594,3 +594,210 @@ def test_payment_limit_reset_is_scoped():
     pl.reset(kind="order", user_id=1)
     pl.consume("order", 1, target="fresh")
     pl.reset()
+
+
+# --------------------------------------------------------------------------- #
+# Pandora Digital supplier integration
+# --------------------------------------------------------------------------- #
+def _pandora_product(pid="prd_1", price="2.00", stock=10):
+    from shared.pandora import PandoraProductData
+    return PandoraProductData(
+        id=pid,
+        name=f"Supplier {pid}",
+        description="Supplier description",
+        unit_price=Decimal(price),
+        currency="USD",
+        available_stock=stock,
+        minimum_quantity=1,
+        maximum_quantity=20,
+        delivery_type="instant",
+        updated_at=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_pandora_client_reads_every_cursor_page(monkeypatch):
+    from shared import pandora
+
+    client = pandora.PandoraClient(api_key="test", base_url="https://example.test")
+    calls = []
+
+    async def fake_request(method, path, **kwargs):
+        calls.append(kwargs.get("params", {}).get("cursor"))
+        if len(calls) == 1:
+            return {
+                "items": [{
+                    "id": "a", "name": "A", "unit_price": "1.00",
+                    "currency": "USD", "available_stock": 1,
+                    "minimum_quantity": 1, "maximum_quantity": 5,
+                    "delivery_type": "instant", "updated_at": "2026-01-01T00:00:00Z",
+                }],
+                "next_cursor": "page-2",
+            }
+        return {
+            "items": [{
+                "id": "b", "name": "B", "unit_price": "2.00",
+                "currency": "USD", "available_stock": 2,
+                "minimum_quantity": 1, "maximum_quantity": 5,
+                "delivery_type": "instant", "updated_at": "2026-01-01T00:00:00Z",
+            }],
+            "next_cursor": None,
+        }
+
+    monkeypatch.setattr(client, "_request", fake_request)
+    products = await client.list_all_products()
+    assert [p.id for p in products] == ["a", "b"]
+    assert calls == [None, "page-2"]
+
+
+def test_pandora_pricing_modes_are_decimal_exact():
+    from shared.models import SupplierPricingMode, SupplierSettings
+    from shared.pandora import calculate_retail_price
+
+    config = SupplierSettings(
+        supplier="pandora",
+        global_pricing_method="FIXED_PROFIT",
+        default_fixed_profit=Decimal("1.00"),
+        default_percentage_markup=Decimal("30.00"),
+        minimum_gross_profit=Decimal("0.00"),
+    )
+    assert calculate_retail_price(Decimal("2.50"), config) == (
+        Decimal("3.50"), Decimal("1.00")
+    )
+    assert calculate_retail_price(
+        Decimal("10.00"), config,
+        SupplierPricingMode.PERCENTAGE_MARKUP, Decimal("20")
+    ) == (Decimal("12.00"), Decimal("2.00"))
+    assert calculate_retail_price(
+        Decimal("4.00"), config,
+        SupplierPricingMode.MANUAL_RETAIL_PRICE, Decimal("7.50")
+    ) == (Decimal("7.50"), Decimal("3.50"))
+
+
+@pytest.mark.asyncio
+async def test_pandora_sync_is_idempotent_and_preserves_local_edits(db, monkeypatch):
+    from shared import pandora
+    from shared.models import Product, SupplierProduct
+
+    monkeypatch.setattr(pandora, "AsyncSessionLocal", db)
+
+    class Catalog:
+        products = [_pandora_product(price="2.00")]
+        async def list_all_products(self):
+            return self.products
+
+    client = Catalog()
+    await pandora.sync_catalog(client)
+    async with db() as session:
+        mapping = await session.scalar(select(SupplierProduct))
+        await pandora.save_product_settings(
+            session,
+            mapping.product_id,
+            name="My custom name",
+            description="My custom description",
+            category="Custom category",
+            pricing_mode="FIXED_PROFIT",
+            pricing_value=Decimal("3.00"),
+            enabled=True,
+        )
+
+    client.products = [_pandora_product(price="2.50")]
+    await pandora.sync_catalog(client)
+    async with db() as session:
+        assert await session.scalar(select(func.count()).select_from(SupplierProduct)) == 1
+        mapping = await session.scalar(select(SupplierProduct))
+        product = await session.get(Product, mapping.product_id)
+        assert product.name == "My custom name"
+        assert product.category == "Custom category"
+        assert mapping.customer_description == "My custom description"
+        assert product.price == Decimal("5.50")
+
+
+@pytest.mark.asyncio
+async def test_pandora_paid_order_fulfills_once_and_saves_before_delivery(db, monkeypatch):
+    from shared import pandora
+    from shared.models import (
+        Inventory, OrderStatus, Product, SupplierFulfillment,
+        SupplierProduct, SupplierSettings,
+    )
+    from shared.schemas import ProductCreate
+
+    user = await _user(db)
+    async with db() as session:
+        product = await services.create_product(
+            session,
+            ProductCreate(name="External", price=Decimal("3.00"), category="Pandora"),
+        )
+        mapping = SupplierProduct(
+            product_id=product.id,
+            supplier="pandora",
+            supplier_product_id="prd_external",
+            supplier_name="External",
+            supplier_description="",
+            supplier_unit_price=Decimal("2.00"),
+            available_stock=10,
+            minimum_quantity=1,
+            maximum_quantity=10,
+            currency="USD",
+            delivery_type="instant",
+        )
+        session.add(mapping)
+        session.add(SupplierSettings(
+            supplier="pandora", global_pricing_method="FIXED_PROFIT",
+            default_fixed_profit=Decimal("1"),
+            default_percentage_markup=Decimal("30"),
+            minimum_gross_profit=Decimal("0"),
+            auto_fulfillment_enabled=True,
+        ))
+        await session.commit()
+        product_id = product.id
+    async with db() as session:
+        await services.add_user_balance(session, user.id, Decimal("20"))
+
+    class Supplier:
+        creates = 0
+        async def create_quote(self, product_id, quantity):
+            return pandora.PandoraQuote(
+                "q1", product_id, quantity, Decimal("2"), Decimal("4"),
+                "USD", 10, True, "pv1"
+            )
+        async def create_order(self, body, idempotency_key):
+            self.creates += 1
+            return pandora.PandoraOrderData(
+                "po1", "delivered", body["product_id"], body["quantity"],
+                Decimal("2"), Decimal("4"), "USD", ("secret-1", "secret-2"), "", ""
+            )
+
+    supplier = Supplier()
+    monkeypatch.setattr(pandora, "PandoraClient", lambda *a, **k: supplier)
+    async with db() as session:
+        order = await services.buy_with_wallet(session, user.id, product_id, 2)
+        order_id = order.id
+    async with db() as session:
+        await pandora.fulfill_paid_order(session, order_id, supplier)
+        await pandora.fulfill_paid_order(session, order_id, supplier)
+    async with db() as session:
+        order = await session.get(Order, order_id)
+        assert order.status is OrderStatus.DELIVERED
+        assert await session.scalar(
+            select(func.count()).select_from(Inventory).where(
+                Inventory.assigned_order_id == order_id
+            )
+        ) == 2
+        assert await session.scalar(
+            select(func.count()).select_from(SupplierFulfillment)
+        ) == 1
+    assert supplier.creates == 1
+
+
+def test_pandora_webhook_signature_and_timestamp():
+    import hashlib
+    import hmac
+    from shared.pandora import verify_webhook_signature
+
+    body = b'{"type":"order.delivered"}'
+    timestamp = "1000"
+    sig = hmac.new(b"secret", timestamp.encode() + b"." + body, hashlib.sha256).hexdigest()
+    assert verify_webhook_signature(body, timestamp, f"v1={sig}", "secret", now=1100)
+    assert not verify_webhook_signature(body + b"x", timestamp, f"v1={sig}", "secret", now=1100)
+    assert not verify_webhook_signature(body, timestamp, f"v1={sig}", "secret", now=2000)

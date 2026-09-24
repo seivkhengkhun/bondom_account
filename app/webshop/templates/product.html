@@ -19,6 +19,10 @@
         </div>
       </div>
 
+      {% if o.description %}
+        <p class="muted" style="margin-top:var(--sp-4);white-space:pre-line">{{ o.description }}</p>
+      {% endif %}
+
       <div class="meta-row">
         {% if show_stock %}
           {% if o.available > 0 %}

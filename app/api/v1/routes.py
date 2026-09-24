@@ -13,7 +13,7 @@ from decimal import Decimal, InvalidOperation
 from fastapi import APIRouter, Query
 from pydantic import BaseModel, Field
 
-from shared import payment_limits, services, sms_service
+from shared import pandora, payment_limits, services, sms_service
 from shared.models import OrderStatus
 
 from .deps import ApiError, CallerDep, SessionDep
@@ -228,14 +228,12 @@ async def create_order(
 
     delivered: list[str] = []
     try:
-        for _ in range(payload.quantity):
-            order = await services.buy_one_with_wallet(
-                db, caller.user.id, payload.product_id
-            )
-            full = await services.get_order_with_items(db, order.id)
-            for item in full.items:
-                if getattr(item, "inventory", None) is not None:
-                    delivered.append(item.inventory.payload)
+        order = await services.buy_with_wallet(
+            db, caller.user.id, payload.product_id, payload.quantity
+        )
+        await pandora.fulfill_paid_order(db, order.id)
+        full = await services.get_order_with_items(db, order.id)
+        delivered.extend(item.data for item in full.items)
     except services.InsufficientBalanceError as exc:
         raise ApiError(
             "insufficient_balance",
@@ -272,6 +270,8 @@ async def create_order(
         raise ApiError("product_not_found", str(exc), 404) from exc
     except services.UserPermanentlyBlockedError as exc:
         raise ApiError("account_blocked", str(exc), 403) from exc
+    except pandora.PandoraError as exc:
+        raise ApiError("supplier_unavailable", str(exc), 409) from exc
 
     return _order_out(order, delivered)
 

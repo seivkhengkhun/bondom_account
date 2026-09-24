@@ -29,7 +29,7 @@ if str(PROJECT_ROOT) not in sys.path:
 import reflex as rx
 from aiogram import Bot
 
-from shared import admin_auth, audit, payment_service, services
+from shared import admin_auth, audit, pandora, payment_service, services
 from shared.config import settings
 from shared.database import AsyncSessionLocal
 from shared.schemas import ProductCreate
@@ -104,6 +104,33 @@ class SmsRow:
     created_at: str
 
 
+@dataclasses.dataclass
+class PandoraProductRow:
+    product_id: int
+    name: str
+    description: str
+    category: str
+    supplier_name: str
+    supplier_price: str
+    selling_price: str
+    profit: str
+    stock: int
+    status: str
+    pricing_mode: str
+    pricing_value: str
+    enabled: bool
+
+
+@dataclasses.dataclass
+class PandoraOrderRow:
+    order_id: int
+    supplier_order_id: str
+    quantity: int
+    supplier_total: str
+    status: str
+    failure: str
+
+
 class AdminState(rx.State):
     # Auth — every mutating handler re-checks ``authed`` server-side, so
     # the gate holds even against hand-crafted websocket events.
@@ -161,6 +188,32 @@ class AdminState(rx.State):
     sms_stat_cost: str = "0.00"
     sms_stat_profit: str = "0.00"
     sms_search: str = ""
+
+    # Pandora Digital supplier control room
+    pandora_products: list[PandoraProductRow] = []
+    pandora_orders: list[PandoraOrderRow] = []
+    pandora_search: str = ""
+    pandora_category_filter: str = "all"
+    pandora_availability_filter: str = "all"
+    pandora_page: int = 1
+    pandora_connection: str = "Not checked"
+    pandora_available_balance: str = "—"
+    pandora_reserved_balance: str = "—"
+    pandora_last_sync: str = "Never"
+    pandora_message: str = ""
+    pandora_global_method: str = "FIXED_PROFIT"
+    pandora_fixed_profit: str = "1.00"
+    pandora_percentage_markup: str = "30.00"
+    pandora_minimum_profit: str = "0.00"
+    pandora_sync_interval: str = "15"
+    pandora_auto_fulfillment: bool = False
+    pandora_edit_product_id: int = 0
+    pandora_edit_name: str = ""
+    pandora_edit_description: str = ""
+    pandora_edit_category: str = "Pandora"
+    pandora_edit_mode: str = "GLOBAL_DEFAULT"
+    pandora_edit_value: str = ""
+    pandora_edit_enabled: bool = True
 
     product_options: list[str] = []
     selected_product: str = ""
@@ -220,6 +273,94 @@ class AdminState(rx.State):
 
     def set_audit_search(self, v: str) -> None:
         self.audit_search = v
+
+    def set_pandora_search(self, v: str) -> None:
+        self.pandora_search = v
+        self.pandora_page = 1
+
+    def set_pandora_category_filter(self, v: str) -> None:
+        self.pandora_category_filter = v
+        self.pandora_page = 1
+
+    def set_pandora_availability_filter(self, v: str) -> None:
+        self.pandora_availability_filter = v
+        self.pandora_page = 1
+
+    def pandora_previous_page(self) -> None:
+        self.pandora_page = max(1, self.pandora_page - 1)
+
+    def pandora_next_page(self) -> None:
+        self.pandora_page += 1
+
+    @rx.var
+    def filtered_pandora_products(self) -> list[PandoraProductRow]:
+        query = self.pandora_search.strip().lower()
+        rows = self.pandora_products
+        if query:
+            rows = [
+                p for p in rows
+                if query in p.name.lower()
+                or query in p.supplier_name.lower()
+                or query in p.category.lower()
+            ]
+        if self.pandora_category_filter != "all":
+            rows = [p for p in rows if p.category == self.pandora_category_filter]
+        if self.pandora_availability_filter == "active":
+            rows = [p for p in rows if p.status == "Active"]
+        elif self.pandora_availability_filter == "out":
+            rows = [p for p in rows if p.stock <= 0]
+        elif self.pandora_availability_filter == "blocked":
+            rows = [p for p in rows if p.status == "Price review"]
+        start = (self.pandora_page - 1) * 25
+        return rows[start:start + 25]
+
+    @rx.var
+    def pandora_categories(self) -> list[str]:
+        return ["all"] + sorted({p.category for p in self.pandora_products})
+
+    @rx.var
+    def pandora_pricing_preview(self) -> str:
+        row = next(
+            (p for p in self.pandora_products if p.product_id == self.pandora_edit_product_id),
+            None,
+        )
+        if row is None:
+            return "Select a product to preview pricing."
+        try:
+            cost = Decimal(row.supplier_price)
+            mode = self.pandora_edit_mode
+            if mode == "GLOBAL_DEFAULT":
+                mode = self.pandora_global_method
+                value = Decimal(
+                    self.pandora_fixed_profit
+                    if mode == "FIXED_PROFIT" else self.pandora_percentage_markup
+                )
+            else:
+                value = Decimal(self.pandora_edit_value or "0")
+            if mode == "FIXED_PROFIT":
+                retail = cost + value
+            elif mode == "PERCENTAGE_MARKUP":
+                retail = cost * (Decimal("1") + value / Decimal("100"))
+            else:
+                retail = value
+            return f"Selling price ${retail:.2f} · Gross profit ${(retail-cost):.2f}"
+        except (InvalidOperation, ValueError):
+            return "Enter a valid pricing value."
+
+    @rx.var
+    def pandora_active_count(self) -> int:
+        return sum(1 for p in self.pandora_products if p.status == "Active")
+
+    @rx.var
+    def pandora_out_count(self) -> int:
+        return sum(1 for p in self.pandora_products if p.stock <= 0)
+
+    @rx.var
+    def pandora_pending_count(self) -> int:
+        return sum(
+            1 for o in self.pandora_orders
+            if o.status in ("ready", "pending", "processing", "review")
+        )
 
     @rx.var
     def filtered_audit(self) -> list[AuditRow]:
@@ -742,6 +883,7 @@ class AdminState(rx.State):
                 row.balance = f"{(await services.get_user_balance(session, row.id)):.2f}"
 
         await self._load_sms()
+        await self._load_pandora()
 
     async def _load_sms(self) -> None:
         from shared import sms_service
@@ -785,6 +927,220 @@ class AdminState(rx.State):
             )
             for o in sms_orders
         ]
+
+    async def _load_pandora(self) -> None:
+        async with AsyncSessionLocal() as session:
+            snapshot = await pandora.admin_snapshot(session)
+        config = snapshot["settings"]
+        self.pandora_global_method = config.global_pricing_method
+        self.pandora_fixed_profit = f"{config.default_fixed_profit:.2f}"
+        self.pandora_percentage_markup = f"{config.default_percentage_markup:.2f}"
+        self.pandora_minimum_profit = f"{config.minimum_gross_profit:.2f}"
+        self.pandora_sync_interval = str(config.sync_interval_minutes)
+        self.pandora_auto_fulfillment = config.auto_fulfillment_enabled
+        last_sync = snapshot["last_sync"]
+        self.pandora_last_sync = (
+            last_sync.completed_at.strftime("%Y-%m-%d %H:%M")
+            if last_sync and last_sync.completed_at else "Never"
+        )
+        self.pandora_products = []
+        for mapping, product, profit in snapshot["products"]:
+            stock = (
+                mapping.available_stock
+                if mapping.available_stock is not None
+                else mapping.maximum_quantity
+            )
+            status = "Active"
+            if mapping.blocked_below_min_profit:
+                status = "Price review"
+            elif not mapping.supplier_available:
+                status = "Unavailable"
+            elif not product.is_active:
+                status = "Disabled"
+            elif stock <= 0:
+                status = "Out of stock"
+            self.pandora_products.append(
+                PandoraProductRow(
+                    product_id=product.id,
+                    name=product.name,
+                    description=(
+                        mapping.customer_description
+                        if mapping.customer_description is not None
+                        else mapping.supplier_description
+                    ),
+                    category=product.category,
+                    supplier_name=mapping.supplier_name,
+                    supplier_price=f"{mapping.supplier_unit_price:.4f}",
+                    selling_price=f"{product.price:.2f}",
+                    profit=f"{profit:.2f}",
+                    stock=int(stock),
+                    status=status,
+                    pricing_mode=mapping.pricing_mode.value,
+                    pricing_value=(
+                        f"{mapping.pricing_value:.4f}"
+                        if mapping.pricing_value is not None else ""
+                    ),
+                    enabled=product.is_active,
+                )
+            )
+        self.pandora_orders = [
+            PandoraOrderRow(
+                order_id=f.order_id,
+                supplier_order_id=f.supplier_order_id or "—",
+                quantity=f.quantity,
+                supplier_total=f"{(f.quoted_supplier_unit_price * f.quantity):.2f}",
+                status=f.status.value,
+                failure=(f"{f.failure_code}: {f.failure_message}".strip(": ")),
+            )
+            for f in snapshot["fulfillments"]
+        ]
+
+    def set_pandora_global_method(self, v: str) -> None:
+        self.pandora_global_method = v
+
+    def set_pandora_fixed_profit(self, v: str) -> None:
+        self.pandora_fixed_profit = v
+
+    def set_pandora_percentage_markup(self, v: str) -> None:
+        self.pandora_percentage_markup = v
+
+    def set_pandora_minimum_profit(self, v: str) -> None:
+        self.pandora_minimum_profit = v
+
+    def set_pandora_sync_interval(self, v: str) -> None:
+        self.pandora_sync_interval = v
+
+    def set_pandora_auto_fulfillment(self, v: bool) -> None:
+        self.pandora_auto_fulfillment = v
+
+    def set_pandora_edit_name(self, v: str) -> None:
+        self.pandora_edit_name = v
+
+    def set_pandora_edit_description(self, v: str) -> None:
+        self.pandora_edit_description = v
+
+    def set_pandora_edit_category(self, v: str) -> None:
+        self.pandora_edit_category = v
+
+    def set_pandora_edit_mode(self, v: str) -> None:
+        self.pandora_edit_mode = v
+
+    def set_pandora_edit_value(self, v: str) -> None:
+        self.pandora_edit_value = v
+
+    def set_pandora_edit_enabled(self, v: bool) -> None:
+        self.pandora_edit_enabled = v
+
+    def select_pandora_product(self, product_id: int) -> None:
+        row = next((p for p in self.pandora_products if p.product_id == product_id), None)
+        if row is None:
+            return
+        self.pandora_edit_product_id = row.product_id
+        self.pandora_edit_name = row.name
+        self.pandora_edit_description = row.description
+        self.pandora_edit_category = row.category
+        self.pandora_edit_mode = row.pricing_mode
+        self.pandora_edit_value = row.pricing_value
+        self.pandora_edit_enabled = row.enabled
+        self.pandora_message = ""
+
+    async def check_pandora_connection(self) -> None:
+        if not self.authed:
+            return
+        try:
+            balance = await pandora.PandoraClient().get_balance()
+            self.pandora_connection = "Connected"
+            self.pandora_available_balance = f"{balance.available:.2f}"
+            self.pandora_reserved_balance = f"{balance.reserved:.2f}"
+            self.pandora_message = "Pandora connection verified."
+        except pandora.PandoraError as exc:
+            self.pandora_connection = "Error"
+            self.pandora_message = str(exc)
+
+    async def sync_pandora_products(self) -> None:
+        if not self.authed:
+            return
+        self.pandora_message = "Synchronizing the complete Pandora catalog…"
+        try:
+            run = await pandora.sync_catalog()
+            self.pandora_message = (
+                f"Sync complete: {run.products_seen} products, "
+                f"{run.products_created} new, {run.products_updated} updated."
+            )
+            await self._load_pandora()
+        except Exception as exc:
+            self.pandora_message = f"Sync failed: {exc}"
+
+    async def save_pandora_global_settings(self) -> None:
+        if not self.authed:
+            return
+        try:
+            async with AsyncSessionLocal() as session:
+                await pandora.save_global_settings(
+                    session,
+                    method=self.pandora_global_method,
+                    fixed_profit=Decimal(self.pandora_fixed_profit),
+                    percentage_markup=Decimal(self.pandora_percentage_markup),
+                    minimum_profit=Decimal(self.pandora_minimum_profit),
+                    sync_interval_minutes=int(self.pandora_sync_interval),
+                    auto_fulfillment_enabled=self.pandora_auto_fulfillment,
+                )
+            self.pandora_message = "Pandora pricing and fulfillment settings saved."
+            await self._load_pandora()
+        except (ValueError, InvalidOperation) as exc:
+            self.pandora_message = f"Invalid settings: {exc}"
+
+    async def save_pandora_product(self) -> None:
+        if not self.authed or not self.pandora_edit_product_id:
+            return
+        try:
+            value = (
+                None
+                if self.pandora_edit_mode == "GLOBAL_DEFAULT"
+                else Decimal(self.pandora_edit_value)
+            )
+            async with AsyncSessionLocal() as session:
+                await pandora.save_product_settings(
+                    session,
+                    self.pandora_edit_product_id,
+                    name=self.pandora_edit_name,
+                    description=self.pandora_edit_description,
+                    category=self.pandora_edit_category,
+                    pricing_mode=self.pandora_edit_mode,
+                    pricing_value=value,
+                    enabled=self.pandora_edit_enabled,
+                )
+            self.pandora_message = "Product settings saved."
+            await self._load_pandora()
+        except (ValueError, InvalidOperation) as exc:
+            self.pandora_message = f"Invalid product settings: {exc}"
+
+    async def refresh_pandora_product(self, product_id: int) -> None:
+        if not self.authed:
+            return
+        try:
+            async with AsyncSessionLocal() as session:
+                mapping = await pandora.get_mapping_by_product(session, product_id)
+                if mapping is None:
+                    raise ValueError("Pandora product mapping not found")
+                await pandora.refresh_product(session, mapping)
+            self.pandora_message = f"Product #{product_id} refreshed."
+        except (ValueError, pandora.PandoraError) as exc:
+            self.pandora_message = f"Refresh failed: {exc}"
+        await self._load_pandora()
+
+    async def fulfill_pandora_order(self, order_id: int) -> None:
+        if not self.authed:
+            return
+        try:
+            async with AsyncSessionLocal() as session:
+                result = await pandora.admin_resolve_fulfillment(session, order_id)
+            self.pandora_message = (
+                f"Order #{order_id}: {result.status.value if result else 'not a Pandora order'}"
+            )
+        except pandora.PandoraError as exc:
+            self.pandora_message = f"Order #{order_id}: {exc.code} — {exc}"
+        await self._load_pandora()
 
     async def save_sms_markup(self) -> None:
         if not self.authed:
@@ -2937,6 +3293,196 @@ def sms_tab() -> rx.Component:
     )
 
 
+def _pandora_product_row(p: PandoraProductRow) -> rx.Component:
+    return rx.table.row(
+        rx.table.cell(rx.vstack(rx.text(p.name, weight="medium"), rx.text(p.category, size="1", color_scheme="gray"), spacing="0", align="start")),
+        rx.table.cell("$" + p.supplier_price),
+        rx.table.cell("$" + p.selling_price),
+        rx.table.cell("$" + p.profit),
+        rx.table.cell(p.stock),
+        rx.table.cell(rx.badge(p.status, variant="soft")),
+        rx.table.cell(rx.hstack(
+            rx.button(
+                rx.icon("pencil", size=13),
+                "Edit",
+                size="1",
+                variant="soft",
+                on_click=lambda: AdminState.select_pandora_product(p.product_id),
+            ),
+            rx.button(
+                rx.icon("refresh-cw", size=13),
+                size="1",
+                variant="ghost",
+                on_click=lambda: AdminState.refresh_pandora_product(p.product_id),
+            ),
+            spacing="1",
+        )),
+    )
+
+
+def _pandora_order_row(o: PandoraOrderRow) -> rx.Component:
+    return rx.table.row(
+        rx.table.cell(f"#{o.order_id}"),
+        rx.table.cell(o.supplier_order_id),
+        rx.table.cell(o.quantity),
+        rx.table.cell("$" + o.supplier_total),
+        rx.table.cell(rx.badge(o.status, variant="soft")),
+        rx.table.cell(o.failure),
+        rx.table.cell(
+            rx.button(
+                "Reconcile",
+                size="1",
+                variant="soft",
+                on_click=lambda: AdminState.fulfill_pandora_order(o.order_id),
+            )
+        ),
+    )
+
+
+def pandora_tab() -> rx.Component:
+    return rx.vstack(
+        rx.grid(
+            stat_card("plug-zap", "Connection", AdminState.pandora_connection, "blue"),
+            stat_card("wallet", "Available balance", "$" + AdminState.pandora_available_balance, "green"),
+            stat_card("lock", "Reserved balance", "$" + AdminState.pandora_reserved_balance, "amber"),
+            stat_card("package", "Imported products", AdminState.pandora_products.length(), "blue"),
+            stat_card("circle-check", "Active products", AdminState.pandora_active_count, "green"),
+            stat_card("package-x", "Out of stock", AdminState.pandora_out_count, "amber"),
+            stat_card("clock", "Pending orders", AdminState.pandora_pending_count, "amber"),
+            columns=rx.breakpoints(initial="2", lg="4"),
+            spacing="3",
+            width="100%",
+        ),
+        rx.card(
+            rx.vstack(
+                card_header(
+                    "refresh-cw",
+                    "Pandora Digital",
+                    "Catalog sync, supplier connectivity, and automatic fulfillment.",
+                ),
+                rx.hstack(
+                    rx.button("Check connection", on_click=AdminState.check_pandora_connection, variant="soft"),
+                    rx.button("Sync all products", on_click=AdminState.sync_pandora_products),
+                    rx.text("Last successful sync: " + AdminState.pandora_last_sync, size="2", color_scheme="gray"),
+                    spacing="3",
+                    align="center",
+                    wrap="wrap",
+                ),
+                section_message(AdminState.pandora_message),
+                spacing="3",
+                width="100%",
+            ),
+            width="100%",
+        ),
+        rx.grid(
+            rx.card(
+                rx.vstack(
+                    card_header("badge-dollar-sign", "Global pricing", "Markup is calculated on supplier cost."),
+                    rx.select(
+                        ["FIXED_PROFIT", "PERCENTAGE_MARKUP"],
+                        value=AdminState.pandora_global_method,
+                        on_change=AdminState.set_pandora_global_method,
+                        width="100%",
+                    ),
+                    rx.hstack(
+                        rx.input(placeholder="Fixed profit", type="number", value=AdminState.pandora_fixed_profit, on_change=AdminState.set_pandora_fixed_profit),
+                        rx.input(placeholder="Markup %", type="number", value=AdminState.pandora_percentage_markup, on_change=AdminState.set_pandora_percentage_markup),
+                        width="100%",
+                    ),
+                    rx.input(placeholder="Minimum gross profit", type="number", value=AdminState.pandora_minimum_profit, on_change=AdminState.set_pandora_minimum_profit, width="100%"),
+                    rx.input(placeholder="Sync interval (minutes)", type="number", value=AdminState.pandora_sync_interval, on_change=AdminState.set_pandora_sync_interval, width="100%"),
+                    rx.hstack(
+                        rx.vstack(rx.text("Automatic fulfillment", weight="medium"), rx.text("Keep disabled until test orders pass.", size="1", color_scheme="gray"), spacing="0", align="start"),
+                        rx.spacer(),
+                        rx.switch(checked=AdminState.pandora_auto_fulfillment, on_change=AdminState.set_pandora_auto_fulfillment),
+                        width="100%",
+                    ),
+                    rx.button("Save settings", on_click=AdminState.save_pandora_global_settings, width="100%"),
+                    spacing="3",
+                    width="100%",
+                ),
+                width="100%",
+            ),
+            rx.card(
+                rx.vstack(
+                    card_header("pencil", "Product pricing", "Local edits are never overwritten by supplier sync."),
+                    rx.input(placeholder="Customer-facing name", value=AdminState.pandora_edit_name, on_change=AdminState.set_pandora_edit_name, width="100%"),
+                    rx.text_area(placeholder="Customer-facing description", value=AdminState.pandora_edit_description, on_change=AdminState.set_pandora_edit_description, width="100%"),
+                    rx.input(placeholder="Local category", value=AdminState.pandora_edit_category, on_change=AdminState.set_pandora_edit_category, width="100%"),
+                    rx.select(
+                        ["GLOBAL_DEFAULT", "FIXED_PROFIT", "PERCENTAGE_MARKUP", "MANUAL_RETAIL_PRICE"],
+                        value=AdminState.pandora_edit_mode,
+                        on_change=AdminState.set_pandora_edit_mode,
+                        width="100%",
+                    ),
+                    rx.input(placeholder="Profit, markup %, or retail price", type="number", value=AdminState.pandora_edit_value, on_change=AdminState.set_pandora_edit_value, width="100%"),
+                    rx.callout(AdminState.pandora_pricing_preview, icon="calculator", size="1", width="100%"),
+                    rx.hstack(rx.text("Sales enabled"), rx.spacer(), rx.switch(checked=AdminState.pandora_edit_enabled, on_change=AdminState.set_pandora_edit_enabled), width="100%"),
+                    rx.button("Save product pricing", on_click=AdminState.save_pandora_product, disabled=AdminState.pandora_edit_product_id == 0, width="100%"),
+                    spacing="3",
+                    width="100%",
+                ),
+                width="100%",
+            ),
+            columns=rx.breakpoints(initial="1", lg="2"),
+            spacing="4",
+            width="100%",
+        ),
+        rx.card(
+            rx.vstack(
+                card_header("boxes", "Pandora products", "Supplier originals and local retail settings."),
+                rx.hstack(
+                    search_box("Search Pandora products…", AdminState.pandora_search, AdminState.set_pandora_search),
+                    rx.select(items=AdminState.pandora_categories, value=AdminState.pandora_category_filter, on_change=AdminState.set_pandora_category_filter),
+                    rx.select(["all", "active", "out", "blocked"], value=AdminState.pandora_availability_filter, on_change=AdminState.set_pandora_availability_filter),
+                    wrap="wrap",
+                    width="100%",
+                ),
+                rx.box(
+                    rx.table.root(
+                        rx.table.header(rx.table.row(*[rx.table.column_header_cell(h) for h in ("Product", "Supplier price", "Selling price", "Profit", "Stock", "Status", "")])),
+                        rx.table.body(rx.foreach(AdminState.filtered_pandora_products, _pandora_product_row)),
+                        variant="surface",
+                        width="100%",
+                    ),
+                    overflow_x="auto",
+                    width="100%",
+                ),
+                rx.hstack(
+                    rx.button("Previous", on_click=AdminState.pandora_previous_page, disabled=AdminState.pandora_page <= 1, variant="soft"),
+                    rx.text("Page " + AdminState.pandora_page.to_string(), size="2"),
+                    rx.button("Next", on_click=AdminState.pandora_next_page, disabled=AdminState.filtered_pandora_products.length() < 25, variant="soft"),
+                    justify="end",
+                    width="100%",
+                ),
+                spacing="3",
+                width="100%",
+            ),
+            width="100%",
+        ),
+        rx.card(
+            rx.vstack(
+                card_header("truck", "Supplier fulfillment", "Paid orders and durable Pandora status."),
+                rx.box(
+                    rx.table.root(
+                        rx.table.header(rx.table.row(*[rx.table.column_header_cell(h) for h in ("Order", "Supplier order", "Qty", "Cost", "Status", "Failure", "")])),
+                        rx.table.body(rx.foreach(AdminState.pandora_orders, _pandora_order_row)),
+                        variant="surface",
+                        width="100%",
+                    ),
+                    overflow_x="auto",
+                    width="100%",
+                ),
+                spacing="3",
+                width="100%",
+            ),
+            width="100%",
+        ),
+        spacing="4",
+        width="100%",
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Overview tab — charts and at-a-glance health
 # --------------------------------------------------------------------------- #
@@ -3431,6 +3977,7 @@ def dashboard_view() -> rx.Component:
                             _tab_trigger("shopping-cart", "Orders", "orders"),
                             _tab_trigger("users", "Users", "users"),
                             _tab_trigger("smartphone", "SMS", "sms"),
+                            _tab_trigger("plug-zap", "Pandora", "pandora"),
                             _tab_trigger("megaphone", "Marketing", "marketing"),
                             _tab_trigger("scroll-text", "Activity", "activity"),
                             _tab_trigger("settings", "Settings", "settings"),
@@ -3454,6 +4001,9 @@ def dashboard_view() -> rx.Component:
                     ),
                     rx.tabs.content(
                         sms_tab(), value="sms", padding_top="1.2em"
+                    ),
+                    rx.tabs.content(
+                        pandora_tab(), value="pandora", padding_top="1.2em"
                     ),
                     rx.tabs.content(
                         marketing_tab(), value="marketing", padding_top="1.2em"

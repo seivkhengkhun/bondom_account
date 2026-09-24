@@ -35,7 +35,8 @@ Bondom Account/
 │   ├── models.py             User, Product, Inventory, Order, Payment, WalletTopup
 │   ├── schemas.py            Pydantic request/response models
 │   ├── services.py           ALL business logic; atomic stock allocation
-│   └── payment_service.py    Bakong KHQR: QR gen, raw verification, polling
+│   ├── payment_service.py    Bakong KHQR: QR gen, raw verification, polling
+│   └── pandora.py            Pandora catalog, pricing, orders, webhooks, recovery
 ├── app/
 │   ├── api/main.py           FastAPI app: JSON API + mounts webshop
 │   ├── bot/                  aiogram bot (handlers.py, runner.py)
@@ -153,6 +154,12 @@ cd /home/ubuntu/bondom_account/app/web && nohup /home/ubuntu/bondom_account/.ven
   paid order intact.
 - [x] **Infra** — nginx + HTTPS (certbot) for both domains; 2 GB swap;
   payment diagnostic script; deploy + local-testing docs.
+- [x] **Pandora Digital supplier integration** — complete cursor-paginated
+  catalog synchronization, shared website/bot products, global and per-product
+  retail pricing, fresh quote protection, durable idempotent supplier orders,
+  signed webhooks, restart reconciliation, and a dedicated admin tab. Automatic
+  supplier purchasing defaults to **off** until explicitly enabled. Setup,
+  migration, validation, and rollback are in `PANDORA_INTEGRATION.md`.
 
 ## 4. Pending / next steps (priority order)
 
