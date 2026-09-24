@@ -738,6 +738,7 @@ async def test_pandora_sync_is_idempotent_and_preserves_local_edits(db, monkeypa
         assert product.name == "My custom name"
         assert product.category == "Custom category"
         assert mapping.customer_description == "My custom description"
+        assert mapping.supplier_available is True
         assert product.price == Decimal("5.50")
 
 

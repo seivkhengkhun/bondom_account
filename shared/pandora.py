@@ -448,16 +448,21 @@ async def _sync_catalog_once(client: PandoraClient | None = None) -> SupplierSyn
                         )
                     updated_count += 1
 
-            # Only a successfully completed full pagination pass can make a
-            # missing product unavailable. Transient API failures never do.
-            missing = list(
-                await session.scalars(
-                    select(SupplierProduct).where(
-                        SupplierProduct.supplier == SUPPLIER,
-                        SupplierProduct.last_seen_sync != token,
-                    )
-                )
+            # Reconcile against this completed catalog snapshot directly.
+            # Do not infer absence from ``last_seen_sync``: the API and admin
+            # run in separate processes, and overlapping successful syncs can
+            # legitimately write different audit tokens to the same rows.
+            # Catalog IDs make the result independent of that cross-process
+            # race. Transient fetch failures never reach this transaction.
+            catalog_ids = [source.id for source in catalog]
+            missing_stmt = select(SupplierProduct).where(
+                SupplierProduct.supplier == SUPPLIER
             )
+            if catalog_ids:
+                missing_stmt = missing_stmt.where(
+                    SupplierProduct.supplier_product_id.not_in(catalog_ids)
+                )
+            missing = list(await session.scalars(missing_stmt))
             for mapping in missing:
                 mapping.supplier_available = False
 
