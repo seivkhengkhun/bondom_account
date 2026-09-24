@@ -395,7 +395,9 @@ async def _sync_catalog_once(client: PandoraClient | None = None) -> SupplierSyn
                         price=retail,
                         category="Pandora",
                         warranty_days=0,
-                        is_active=True,
+                        # Newly imported supplier products require an explicit
+                        # admin review before they can be sold.
+                        is_active=False,
                     )
                     session.add(product)
                     await session.flush()

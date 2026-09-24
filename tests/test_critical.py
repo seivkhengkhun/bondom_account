@@ -716,6 +716,8 @@ async def test_pandora_sync_is_idempotent_and_preserves_local_edits(db, monkeypa
     await pandora.sync_catalog(client)
     async with db() as session:
         mapping = await session.scalar(select(SupplierProduct))
+        product = await session.get(Product, mapping.product_id)
+        assert product.is_active is False
         await pandora.save_product_settings(
             session,
             mapping.product_id,
