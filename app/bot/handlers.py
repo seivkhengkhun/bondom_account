@@ -11,6 +11,7 @@ import logging
 from decimal import Decimal, InvalidOperation
 
 from aiogram import Bot, F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -30,6 +31,7 @@ from shared.config import settings
 from shared.database import AsyncSessionLocal
 from shared.models import Order, OrderStatus, Product, SmsOrderStatus
 from shared.schemas import OrderCreate
+from app.bot.appearance import emoji, inline_button, reply_button, cache, current
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -82,12 +84,15 @@ BTN_TOPUP = "💳 Top Up Wallet"
 BTN_BALANCE = "💰 My Balance"
 BTN_ORDERS = "📦 My Orders"
 BTN_SMS = "📱 SMS Numbers"
+BTN_ACCOUNT = "👤 Account"
+BTN_SUPPORT = "💬 Support"
 
 
 def _main_menu() -> ReplyKeyboardMarkup:
     rows = [
-        [KeyboardButton(text=BTN_BROWSE), KeyboardButton(text=BTN_TOPUP)],
-        [KeyboardButton(text=BTN_BALANCE), KeyboardButton(text=BTN_ORDERS)],
+        [reply_button("shop", BTN_BROWSE), reply_button("money", BTN_TOPUP)],
+        [reply_button("balance", BTN_BALANCE), reply_button("orders", BTN_ORDERS)],
+        [reply_button("account", BTN_ACCOUNT), reply_button("support", BTN_SUPPORT)],
     ]
     if settings.sms_enabled:
         rows.append([KeyboardButton(text=BTN_SMS)])
@@ -120,13 +125,10 @@ async def cmd_start(message: Message) -> None:
             )
             return
     await message.answer(
-        "សូមស្វាគមន៍មកកាន់ Bondom Account - បណ្តុំអាខោន!\n"
-        "យើងផ្តល់ជូននូវសេវាកម្ម និងគណនីចម្រុះជាច្រើនប្រភេទ។ "
-        "សូមរីករាយជាមួយបទពិសោធន៍ដ៏ល្អឥតខ្ចោះជាមួយយើង។\n\n"
-        "Welcome to Bondom Account!\n"
-        "We provide a variety of high-quality accounts and services. "
-        "We are pleased to have you with us and hope you enjoy our services.\n\n"
-        f"Use {BTN_BROWSE} to start shopping.",
+        f"{emoji('home')} <b>Bondom Account</b>\n"
+        "សូមស្វាគមន៍មកកាន់ បណ្តុំអាខោន!\n\n"
+        "Premium accounts. Simple checkout. Fast delivery.\n\n"
+        "Browse products or manage your wallet below.",
         reply_markup=_main_menu(),
     )
 
@@ -157,15 +159,15 @@ def _category_menu(active: list) -> tuple[str, InlineKeyboardMarkup]:
     }
     rows = [
         [
-            InlineKeyboardButton(
-                text=f"📂 {c}  ({counts[c]})",
+            inline_button(
+                "shop", f"{c}  ({counts[c]})",
                 callback_data=f"pcat:{i}:0",
             )
         ]
         for i, c in enumerate(categories)
     ]
     text = (
-        "🛍 <b>Product Catalog</b>\n\n"
+        f"{emoji('shop')} <b>Product Catalog</b>\n\n"
         "Choose a category to see its products:"
     )
     return text, InlineKeyboardMarkup(inline_keyboard=rows)
@@ -213,11 +215,11 @@ def _category_page(
     if nav:
         rows.append(nav)
     rows.append(
-        [InlineKeyboardButton(text="📂 All categories", callback_data="pcats")]
+        [inline_button("back", "All categories", callback_data="pcats")]
     )
     page_info = f" — page {page + 1}/{pages}" if pages > 1 else ""
     text = (
-        f"📂 <b>{html.escape(category)}</b>{page_info}\n\n"
+        f"{emoji('shop')} <b>{html.escape(category)}</b>{page_info}\n\n"
         "Tap a product to see details and buy:"
     )
     return text, InlineKeyboardMarkup(inline_keyboard=rows)
@@ -235,8 +237,8 @@ async def _product_card(
     async with AsyncSessionLocal() as session:
         note = await services.get_product_client_note(session, product.id)
 
-    lines = [f"📦 <b>{html.escape(product.name)}</b>", ""]
-    lines.append(f"💵 Price: <b>${product.price}</b>")
+    lines = [f"{emoji('product')} <b>{html.escape(product.name)}</b>", ""]
+    lines.append(f"Price: <b>${product.price}</b>")
     if selected.description:
         lines.extend(["", html.escape(selected.description)])
     if product.warranty_days:
@@ -250,18 +252,18 @@ async def _product_card(
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(
-                    text="🛒 Buy with KHQR",
+                inline_button(
+                    "cart", "Buy with KHQR", style="primary",
                     callback_data=f"buy:{product.id}",
                 ),
-                InlineKeyboardButton(
-                    text="⚡ Buy 1 (Wallet)",
+                inline_button(
+                    "delivery", "Buy 1 (Wallet)", style="success",
                     callback_data=f"wb1:{product.id}",
                 ),
             ],
             [
-                InlineKeyboardButton(
-                    text="◀️ Back",
+                inline_button(
+                    "back", "Back",
                     callback_data=f"pcat:{cat_idx}:{page}",
                 )
             ],
@@ -275,7 +277,11 @@ async def _edit_or_answer(callback: CallbackQuery, text: str, markup) -> None:
     assert callback.message is not None
     try:
         await callback.message.edit_text(text, reply_markup=markup)
-    except Exception:
+    except TelegramBadRequest as exc:
+        if "message is not modified" in exc.message.lower():
+            return
+        if "message can't be edited" not in exc.message.lower() and "message to edit not found" not in exc.message.lower():
+            raise
         await callback.message.answer(text, reply_markup=markup)
 
 
@@ -370,7 +376,7 @@ async def cmd_products(message: Message) -> None:
     await _show_products_for_user(message, message.from_user.id)
 
 
-@router.message(F.text == BTN_BROWSE)
+@router.message(F.text.in_({BTN_BROWSE, "Browse Products"}))
 async def btn_browse(message: Message) -> None:
     if message.from_user is None:
         return
@@ -405,12 +411,12 @@ async def _show_orders_for_user(message: Message, telegram_id: int) -> None:
         )
         return
 
-    lines = ["📦 <b>Your recent orders</b>", ""]
+    lines = [f"{emoji('orders')} <b>Your recent orders</b>", ""]
     buttons: list[list[InlineKeyboardButton]] = []
     for order in orders:
-        emoji = _ORDER_STATUS_EMOJI.get(order.status, "•")
+        status_icon = _ORDER_STATUS_EMOJI.get(order.status, "•")
         lines.append(
-            f"{emoji} Order <b>#{order.id}</b> — ${order.total_price} — "
+            f"{status_icon} Order <b>#{order.id}</b> — ${order.total_price} — "
             f"{order.status.value} — {order.created_at:%Y-%m-%d %H:%M}"
         )
         if order.status is OrderStatus.DELIVERED:
@@ -438,7 +444,7 @@ async def cmd_my_orders(message: Message) -> None:
     await _show_orders_for_user(message, message.from_user.id)
 
 
-@router.message(F.text == BTN_ORDERS)
+@router.message(F.text.in_({BTN_ORDERS, "My Orders"}))
 async def btn_my_orders(message: Message) -> None:
     if message.from_user is None:
         return
@@ -482,7 +488,7 @@ async def cb_resend_order(callback: CallbackQuery) -> None:
     await callback.answer("Items sent again ⬆")
 
 
-@router.message(F.text == BTN_BALANCE)
+@router.message(F.text.in_({BTN_BALANCE, "My Balance"}))
 async def btn_balance(message: Message) -> None:
     if message.from_user is None:
         return
@@ -496,10 +502,13 @@ async def btn_balance(message: Message) -> None:
             )
             return
         balance = await services.get_user_balance(session, user.id)
-    await message.answer(f"💰 Your wallet balance: <b>${balance:.2f}</b>")
+    await message.answer(
+        f"{emoji('balance')} <b>Your Balance</b>\n\n"
+        f"Available: <b>${balance:.2f}</b>\nReady for your next purchase."
+    )
 
 
-@router.message(F.text == BTN_TOPUP)
+@router.message(F.text.in_({BTN_TOPUP, "Top Up Wallet"}))
 async def btn_topup(message: Message, state: FSMContext) -> None:
     if message.from_user is None:
         return
@@ -523,10 +532,68 @@ async def btn_topup(message: Message, state: FSMContext) -> None:
     minimum = payment_service.effective_min_topup(override)
 
     await message.answer(
-        "Enter top-up amount in USD (example: 10 or 15.50)\n"
+        f"{emoji('money')} <b>Add Balance</b>\n\n"
+        "Enter an amount in USD (example: 10 or 15.50).\n"
         f"Minimum ${minimum:.2f} · "
         f"maximum ${payment_service.MAX_TOPUP:.0f}"
         + ("\n(An admin has lowered the minimum on your account.)" if override else "")
+    )
+
+
+async def _show_account(message: Message, telegram_id: int, username: str | None) -> None:
+    async with AsyncSessionLocal() as session:
+        user = await services.get_or_create_user(session, telegram_id, username)
+        if await services.is_user_blocked(session, user.id):
+            await message.answer("Your account is blocked. Contact support.")
+            return
+        balance = await services.get_user_balance(session, user.id)
+    await message.answer(
+        f"{emoji('account')} <b>Your Account</b>\n\n"
+        f"Name: {html.escape(username or 'Customer')}\n"
+        f"Telegram ID: <code>{telegram_id}</code>\n"
+        f"Wallet: <b>${balance:.2f}</b>\n\n"
+        "Use My Orders to view purchases and resend delivered items."
+    )
+
+
+@router.message(Command("account"))
+@router.message(F.text.in_({BTN_ACCOUNT, "Account"}))
+async def btn_account(message: Message, state: FSMContext) -> None:
+    if message.from_user:
+        await state.clear()
+        await _show_account(message, message.from_user.id, message.from_user.username)
+
+
+@router.callback_query(F.data == "ui:account")
+async def cb_account(callback: CallbackQuery) -> None:
+    if callback.message:
+        await _show_account(callback.message, callback.from_user.id, callback.from_user.username)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "ui:products")
+async def cb_products(callback: CallbackQuery) -> None:
+    if callback.message:
+        await _show_products_for_user(callback.message, callback.from_user.id)
+    await callback.answer()
+
+
+@router.message(Command("support"))
+@router.message(F.text.in_({BTN_SUPPORT, "Support"}))
+async def btn_support(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    username = settings.support_username.strip().lstrip("@")
+    # Accept only Telegram username characters, never interpolate a free-form URL.
+    import re
+    valid = bool(re.fullmatch(r"[A-Za-z0-9_]{5,32}", username))
+    contact = f"Contact @{html.escape(username)}." if valid else "Contact the store administrator for assistance."
+    markup = InlineKeyboardMarkup(inline_keyboard=[[
+        inline_button("support", "Contact Support", url=f"https://t.me/{username}")
+    ]]) if valid else None
+    await message.answer(
+        f"{emoji('support')} <b>Support</b>\n\n{contact}\n"
+        "Include your order number and a short description. Never send passwords or payment tokens.",
+        reply_markup=markup,
     )
 
 
@@ -567,7 +634,7 @@ async def msg_topup_amount(message: Message, state: FSMContext) -> None:
             await state.clear()
             return
         except payment_service.PaymentError as exc:
-            await message.answer(str(exc))
+            await message.answer(html.escape(str(exc)))
             await state.clear()
             return
 
@@ -576,8 +643,8 @@ async def msg_topup_amount(message: Message, state: FSMContext) -> None:
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(
-                    text="✅ I've paid top-up — check",
+                inline_button(
+                    "refresh", "I've paid top-up — check", style="primary",
                     callback_data=f"tchk:{topup.id}",
                 )
             ]
@@ -595,7 +662,7 @@ async def msg_topup_amount(message: Message, state: FSMContext) -> None:
     await message.answer_photo(
         photo=photo,
         caption=(
-            f"💳 Wallet top-up <b>#{topup.id}</b>\n"
+            f"{emoji('money')} <b>Add Balance · #{topup.id}</b>\n"
             f"Amount: <b>${topup.amount}</b>\n\n"
             "Scan and pay, then tap check."
         ),
@@ -629,7 +696,7 @@ def _sms_waiting_text(order, phone: str, frame: int, elapsed: float) -> str:
     spin = _SMS_SPINNER[frame % len(_SMS_SPINNER)]
     bar = _sms_progress_bar(elapsed, sms_service.SMS_ORDER_TTL_SECONDS)
     return (
-        f"📱 Order <b>#{order.id}</b> · {order.country} · ${order.price:.2f}\n\n"
+        f"📱 Order <b>#{order.id}</b> · {html.escape(order.country)} · ${order.price:.2f}\n\n"
         f"☎️ <code>{html.escape(phone)}</code>\n\n"
         f"{spin} <b>Waiting for SMS code…</b>\n"
         f"{bar}\n"
@@ -770,12 +837,12 @@ async def cb_sms_category(callback: CallbackQuery) -> None:
     rows.append([InlineKeyboardButton(text="◀️ Back", callback_data="smsback")])
     try:
         await callback.message.edit_text(
-            f"{_SMS_CAT_LABEL.get(category, category)} — choose a country:",
+            f"{html.escape(_SMS_CAT_LABEL.get(category, category))} — choose a country:",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
         )
     except Exception:
         await callback.message.answer(
-            f"{_SMS_CAT_LABEL.get(category, category)} — choose a country:",
+            f"{html.escape(_SMS_CAT_LABEL.get(category, category))} — choose a country:",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
         )
     await callback.answer()
@@ -906,7 +973,7 @@ async def cb_sms_mine(callback: CallbackQuery) -> None:
         )
         lines.append(
             f"{emoji.get(o.status, '•')} <code>{html.escape(o.phone or '—')}</code> "
-            f"· {o.country} · ${o.price:.2f} · {tail}"
+            f"· {html.escape(o.country)} · ${o.price:.2f} · {tail}"
         )
     await callback.message.answer("\n".join(lines))
     await callback.answer()
@@ -983,9 +1050,21 @@ async def cb_wallet_buy_one(callback: CallbackQuery) -> None:
                 ),
                 show_alert=True,
             )
+            if callback.message:
+                await callback.message.answer(
+                    f"{emoji('warning')} <b>Insufficient Balance</b>\n\n"
+                    f"Required: <b>${exc.required:.2f}</b>\n"
+                    f"Available: <b>${exc.balance:.2f}</b>\n\n"
+                    "Use Top Up Wallet to add balance."
+                )
             return
         except services.OutOfStockError:
             await callback.answer("Out of stock.", show_alert=True)
+            if callback.message:
+                await callback.message.answer(
+                    f"{emoji('warning')} <b>Purchase Failed</b>\n\n"
+                    "This product is out of stock. Please choose another product."
+                )
             return
         except services.BelowMinimumQuantityError as exc:
             await callback.answer(
@@ -1063,7 +1142,9 @@ async def cb_buy(callback: CallbackQuery, state: FSMContext) -> None:
         ]
     )
     await callback.message.answer(
-        f"Selected: <b>{selected.product.name}</b>\n"
+        f"{emoji('cart')} <b>Purchase Confirmation</b>\n\n"
+        f"Product: <b>{html.escape(selected.product.name)}</b>\n"
+        f"Unit price: <b>${selected.product.price}</b>\n"
         + (
             f"Stock left: <b>{selected.available}</b>\n\n"
             if show_stock
@@ -1182,13 +1263,13 @@ async def msg_buy_quantity(message: Message, state: FSMContext) -> None:
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(
-                    text="✅ I've paid — check", callback_data=f"chk:{order.id}"
+                inline_button(
+                    "refresh", "I've paid — check", style="primary", callback_data=f"chk:{order.id}"
                 )
             ],
             [
-                InlineKeyboardButton(
-                    text="Cancel order", callback_data=f"cancelpay:{order.id}"
+                inline_button(
+                    "back", "Cancel order", style="danger", callback_data=f"cancelpay:{order.id}"
                 )
             ],
         ]
@@ -1214,7 +1295,8 @@ async def msg_buy_quantity(message: Message, state: FSMContext) -> None:
     await message.answer_photo(
         photo=photo,
         caption=(
-            f"🧾 Order <b>#{order.id}</b> — total <b>${order.total_price}</b>\n\n"
+            f"{emoji('cart')} <b>Checkout · #{order.id}</b>\n"
+            f"Total: <b>${order.total_price}</b>\n\n"
             "📲 Scan this KHQR with any Cambodian banking app "
             "(ABA, Bakong, ACLEDA, Wing…) to pay.\n\n"
             "⏱ The QR expires in 15 minutes. "
@@ -1291,6 +1373,9 @@ async def cb_check_payment(callback: CallbackQuery) -> None:
                 return
         else:
             await services.mark_order_delivered(session, order_id)
+            # The supplier lookup opened a transaction, even for local items.
+            # Persist delivery before sending credentials or closing the session.
+            await session.commit()
         order = await services.get_order_with_items(session, order_id)
         await _deliver_order(callback, order)
 
@@ -1350,11 +1435,12 @@ async def _watch_payment_and_auto_deliver(
 ) -> None:
     """Auto-confirm and deliver once payment is detected in background."""
     paid = await payment_service.poll_payment_until_paid(payment_id)
+    current.set(await cache.get())
     if not paid:
         try:
             await bot.send_message(
                 chat_id,
-                f"⌛ Order #{order_id} expired unpaid. "
+                f"{emoji('warning')} <b>Payment Expired</b>\n\nOrder #{order_id} expired unpaid. "
                 "If needed, please create a new order.",
             )
         except Exception:
@@ -1377,6 +1463,7 @@ async def _watch_payment_and_auto_deliver(
         fulfillment = await pandora.fulfill_paid_order(session, order_id)
         if fulfillment is None:
             await services.mark_order_delivered(session, order_id)
+            await session.commit()
         order = await services.get_order_with_items(session, order_id)
 
     if order.status is OrderStatus.DELIVERED:
@@ -1403,13 +1490,16 @@ async def _deliver_order_to_chat(
     bot: Bot,
     chat_id: int,
     order: Order,
-    title: str = "✅ Payment confirmed",
+    title: str | None = None,
 ) -> None:
     """Send purchased inventory data to a chat id.
 
     Items are grouped per product so every product shows ITS OWN
     warranty and delivery note (an order can mix products).
     """
+    # Background delivery may outlive its initiating update; refresh appearance.
+    current.set(await cache.get())
+    title = html.escape(title) if title else f"{emoji('success')} <b>PURCHASE SUCCESSFUL</b>"
     grouped: dict[int, list[str]] = {}
     for item in order.items:
         grouped.setdefault(item.product_id, []).append(item.data)
@@ -1431,7 +1521,7 @@ async def _deliver_order_to_chat(
         lines = "\n".join(
             f"• <code>{html.escape(value)}</code>" for value in values
         )
-        section = f"📦 <b>{html.escape(name)}</b>\n{lines}"
+        section = f"{emoji('product')} <b>{html.escape(name)}</b>\n{lines}"
         file_section = [name] + [f"- {value}" for value in values]
         if product and product.warranty_days:
             section += f"\n🛡 Warranty: {product.warranty_days} days"
@@ -1446,9 +1536,14 @@ async def _deliver_order_to_chat(
     body = "\n\n".join(sections)
     await bot.send_message(
         chat_id,
-        f"{title} — order <b>#{order.id}</b>\n\n"
+        f"{title}\nOrder <b>#{order.id}</b> · <b>${order.total_price}</b>\n"
+        f"{emoji('delivery')} Delivered · your items are ready\n\n"
         f"{body}\n\n"
-        "Thank you for your purchase!"
+        "Thank you for your purchase!",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            inline_button("account", "View Account", callback_data="ui:account"),
+            inline_button("shop", "Buy Another", callback_data="ui:products"),
+        ]]),
     )
 
     # Send a downloadable text file so clients can keep order credentials safely.

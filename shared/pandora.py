@@ -931,7 +931,7 @@ async def notify_customer_delivery(order_id: int) -> bool:
     """
     if not settings.bot_token:
         return False
-    from aiogram import Bot
+    from app.bot.appearance import create_bot
     from app.bot.handlers import _deliver_order_to_chat
     from shared import services
 
@@ -946,7 +946,7 @@ async def notify_customer_delivery(order_id: int) -> bool:
         if fulfillment is None or user is None or fulfillment.customer_notified_at:
             return False
         telegram_id = int(user.telegram_id)
-    bot = Bot(settings.bot_token)
+    bot = create_bot(settings.bot_token)
     try:
         await _deliver_order_to_chat(
             bot, telegram_id, order, title="✅ Supplier order delivered"

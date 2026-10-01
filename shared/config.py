@@ -30,6 +30,9 @@ class Settings(BaseSettings):
 
     # Telegram bot (aiogram)
     bot_token: str = ""
+    # JSON list of numeric Telegram IDs; empty disables Telegram admin access.
+    telegram_admin_ids: list[int] = []
+    support_username: str = ""
 
     # Payments — Bakong KHQR
     # When payment_dev_mode is true, QR generation and verification are

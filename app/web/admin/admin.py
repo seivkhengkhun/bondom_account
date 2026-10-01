@@ -30,6 +30,8 @@ import reflex as rx
 from aiogram import Bot
 
 from shared import admin_auth, audit, pandora, payment_service, services
+from shared import bot_appearance
+from app.bot.appearance import create_bot, current, emoji, validate_custom_emoji, cache
 from shared.config import settings
 from shared.database import AsyncSessionLocal
 from shared.schemas import ProductCreate
@@ -131,6 +133,14 @@ class PandoraOrderRow:
     failure: str
 
 
+@dataclasses.dataclass
+class EmojiRow:
+    key: str
+    custom_emoji_id: str
+    fallback_emoji: str
+    enabled: bool
+
+
 class AdminState(rx.State):
     # Auth — every mutating handler re-checks ``authed`` server-side, so
     # the gate holds even against hand-crafted websocket events.
@@ -220,6 +230,15 @@ class AdminState(rx.State):
     categories: list[str] = []
     upload_message: str = ""
     bot_show_stock: bool = True
+    emoji_rows: list[EmojiRow] = []
+    emoji_options: list[str] = list(bot_appearance.DEFAULTS)
+    emoji_selected: str = "home"
+    emoji_id: str = ""
+    emoji_fallback: str = "🏠"
+    emoji_enabled: bool = True
+    animated_emoji_enabled: bool = True
+    emoji_message: str = ""
+    emoji_preview_chat: str = ""
     orders_message: str = ""
     announcement_text: str = ""
     announcement_message: str = ""
@@ -1047,6 +1066,7 @@ class AdminState(rx.State):
     async def check_pandora_connection(self) -> None:
         if not self.authed:
             return
+        await self.load_appearance()
         try:
             balance = await pandora.PandoraClient().get_balance()
             self.pandora_connection = "Connected"
@@ -1859,6 +1879,113 @@ class AdminState(rx.State):
         )
         await self.load_all()
 
+    async def load_appearance(self) -> None:
+        if not self.authed:
+            return
+        async with AsyncSessionLocal() as session:
+            appearance = await bot_appearance.load_appearance(session)
+        self.emoji_rows = [EmojiRow(s.key, s.custom_emoji_id, s.fallback_emoji, s.enabled)
+                           for s in appearance.slots.values()]
+        self.animated_emoji_enabled = appearance.enabled
+        slot = appearance.slots[self.emoji_selected]
+        self.emoji_id = slot.custom_emoji_id
+        self.emoji_fallback = slot.fallback_emoji
+        self.emoji_enabled = slot.enabled
+
+    async def select_emoji(self, key: str) -> None:
+        if not self.authed or key not in bot_appearance.DEFAULTS:
+            return
+        self.touch()
+        self.emoji_selected = key
+        self.emoji_message = ""
+        await self.load_appearance()
+
+    def set_emoji_id(self, value: str) -> None:
+        if self.authed:
+            self.emoji_id = value
+
+    def set_emoji_enabled(self, value: bool) -> None:
+        if self.authed:
+            self.emoji_enabled = value
+
+    def set_emoji_preview_chat(self, value: str) -> None:
+        if self.authed:
+            self.emoji_preview_chat = value
+
+    async def save_emoji(self) -> None:
+        if not self.authed:
+            return
+        self.touch()
+        bot = None
+        try:
+            custom_id = bot_appearance.validate_id(self.emoji_id)
+            fallback = self.emoji_fallback
+            if custom_id:
+                if not settings.bot_token:
+                    raise ValueError("Set BOT_TOKEN before validating custom emoji IDs.")
+                bot = create_bot(settings.bot_token)
+                fallback = await validate_custom_emoji(bot, custom_id)
+            async with AsyncSessionLocal() as session:
+                await bot_appearance.save_slot(session, self.emoji_selected, custom_id,
+                                               self.emoji_enabled, fallback)
+            cache.expires = 0
+            await self.load_appearance()
+            self.emoji_message = "Saved. The bot refreshes appearance within 5 seconds."
+        except ValueError as exc:
+            self.emoji_message = str(exc)
+        except Exception:
+            bot_appearance.warn_once("admin_save_failed")
+            self.emoji_message = "Could not validate or save. Check the ID and bot connection."
+        finally:
+            if bot is not None:
+                await bot.session.close()
+
+    async def reset_emoji(self) -> None:
+        if not self.authed:
+            return
+        self.touch()
+        async with AsyncSessionLocal() as session:
+            await bot_appearance.reset_slot(session, self.emoji_selected)
+        cache.expires = 0
+        await self.load_appearance()
+        self.emoji_message = "Reset to the default Unicode emoji."
+
+    async def toggle_animated_emoji(self, enabled: bool) -> None:
+        if not self.authed:
+            return
+        self.touch()
+        async with AsyncSessionLocal() as session:
+            await bot_appearance.set_global_enabled(session, enabled)
+        cache.expires = 0
+        self.animated_emoji_enabled = enabled
+        self.emoji_message = "Global animation setting saved."
+
+    async def preview_emoji(self) -> None:
+        if not self.authed:
+            return
+        self.touch()
+        if not self.emoji_preview_chat.strip().isdigit() or not settings.bot_token:
+            self.emoji_message = "Enter your numeric Telegram ID and start the bot first."
+            return
+        bot = None
+        token = None
+        try:
+            async with AsyncSessionLocal() as session:
+                appearance = await bot_appearance.load_appearance(session)
+            token = current.set(appearance)
+            bot = create_bot(settings.bot_token)
+            await bot.send_message(int(self.emoji_preview_chat),
+                                   f"{emoji(self.emoji_selected)} <b>Bondom Account · Preview</b>\n"
+                                   f"Slot: {self.emoji_selected}")
+            self.emoji_message = "Preview of saved settings sent to your Telegram chat."
+        except Exception:
+            self.emoji_message = "Preview failed. Start the bot and check your Telegram ID."
+        finally:
+            if token is not None:
+                current.reset(token)
+            if bot is not None:
+                await bot.session.close()
+
     async def publish_announcement(self) -> None:
         if not self.authed:
             return
@@ -1872,6 +1999,7 @@ class AdminState(rx.State):
 
         async with AsyncSessionLocal() as session:
             telegram_ids = await services.list_active_telegram_ids(session)
+            appearance = await bot_appearance.load_appearance(session)
 
         if not telegram_ids:
             self.announcement_message = "ℹ No active users to receive announcement."
@@ -1879,7 +2007,10 @@ class AdminState(rx.State):
 
         sent = 0
         failed = 0
-        bot = Bot(token=settings.bot_token)
+        import html
+        token = current.set(appearance)
+        bot = create_bot(settings.bot_token)
+        message = f"{emoji('gift')} <b>Bondom Account · Update</b>\n\n{html.escape(message)}"
         try:
             for chat_id in telegram_ids:
                 try:
@@ -1888,6 +2019,7 @@ class AdminState(rx.State):
                 except Exception:
                     failed += 1
         finally:
+            current.reset(token)
             await bot.session.close()
 
         self.announcement_message = (
@@ -3089,6 +3221,58 @@ def users_tab() -> rx.Component:
 # --------------------------------------------------------------------------- #
 # Marketing / settings tab
 # --------------------------------------------------------------------------- #
+def _emoji_row(slot: EmojiRow) -> rx.Component:
+    return rx.table.row(
+        rx.table.cell(slot.key),
+        rx.table.cell(slot.fallback_emoji),
+        rx.table.cell(rx.cond(slot.custom_emoji_id != "", slot.custom_emoji_id, "Default")),
+        rx.table.cell(rx.cond(slot.enabled, "Enabled", "Disabled")),
+    )
+
+
+def appearance_tab() -> rx.Component:
+    return rx.vstack(
+        rx.card(
+            rx.vstack(
+                card_header("sparkles", "Custom Emoji", "Admin → Bot Appearance → Custom Emoji"),
+                rx.hstack(
+                    rx.switch(checked=AdminState.animated_emoji_enabled,
+                              on_change=AdminState.toggle_animated_emoji),
+                    rx.text("Enable custom animated emojis globally"),
+                    align="center", spacing="3",
+                ),
+                rx.text("Choose a slot, paste an ID, then save. Telegram validates the ID and its Unicode fallback.", size="2"),
+                rx.select(AdminState.emoji_options, value=AdminState.emoji_selected,
+                          on_change=AdminState.select_emoji),
+                rx.input(placeholder="Custom emoji ID (leave empty for Unicode)",
+                         value=AdminState.emoji_id, on_change=AdminState.set_emoji_id, width="100%"),
+                rx.hstack(rx.text("Fallback:"), rx.text(AdminState.emoji_fallback),
+                          rx.switch(checked=AdminState.emoji_enabled, on_change=AdminState.set_emoji_enabled),
+                          rx.text("Enable this slot"), align="center", spacing="3"),
+                rx.hstack(
+                    rx.button("Save Changes", on_click=AdminState.save_emoji),
+                    rx.button("Reset to Default", on_click=AdminState.reset_emoji, variant="soft"),
+                    spacing="3",
+                ),
+                rx.separator(),
+                rx.text("Telegram preview · saved settings", weight="medium"),
+                rx.input(placeholder="Your numeric Telegram ID", value=AdminState.emoji_preview_chat,
+                         on_change=AdminState.set_emoji_preview_chat, width="100%"),
+                rx.button("Send Preview", on_click=AdminState.preview_emoji, variant="soft"),
+                rx.text("For ID extraction, add your Telegram ID to TELEGRAM_ADMIN_IDS, restart, then use /admin. Send or forward one custom emoji in the slot editor, or reply to it with /emoji_id.", size="2"),
+                section_message(AdminState.emoji_message),
+                rx.table.root(
+                    rx.table.header(rx.table.row(*[rx.table.column_header_cell(label)
+                                                  for label in ["Slot", "Fallback", "Custom ID", "Status"]])),
+                    rx.table.body(rx.foreach(AdminState.emoji_rows, _emoji_row)),
+                    width="100%",
+                ),
+                spacing="3", width="100%",
+            ), size="3", width="100%",
+        ), spacing="4", width="100%",
+    )
+
+
 def marketing_tab() -> rx.Component:
     return rx.vstack(
         rx.card(
@@ -3979,6 +4163,7 @@ def dashboard_view() -> rx.Component:
                             _tab_trigger("smartphone", "SMS", "sms"),
                             _tab_trigger("plug-zap", "Pandora", "pandora"),
                             _tab_trigger("megaphone", "Marketing", "marketing"),
+                            _tab_trigger("sparkles", "Bot Appearance", "appearance"),
                             _tab_trigger("scroll-text", "Activity", "activity"),
                             _tab_trigger("settings", "Settings", "settings"),
                             size="2",
@@ -4007,6 +4192,9 @@ def dashboard_view() -> rx.Component:
                     ),
                     rx.tabs.content(
                         marketing_tab(), value="marketing", padding_top="1.2em"
+                    ),
+                    rx.tabs.content(
+                        appearance_tab(), value="appearance", padding_top="1.2em"
                     ),
                     rx.tabs.content(
                         activity_tab(), value="activity", padding_top="1.2em"

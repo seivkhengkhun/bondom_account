@@ -2,11 +2,11 @@
 
 import logging
 
-from aiogram import Bot, Dispatcher
-from aiogram.client.default import DefaultBotProperties
-from aiogram.enums import ParseMode
+from aiogram import Dispatcher
 
 from app.bot.handlers import router
+from app.bot.admin_appearance import router as appearance_router
+from app.bot.appearance import AppearanceMiddleware, cache, create_bot
 from shared.config import settings
 
 logger = logging.getLogger(__name__)
@@ -14,6 +14,8 @@ logger = logging.getLogger(__name__)
 
 def build_dispatcher() -> Dispatcher:
     dispatcher = Dispatcher()
+    dispatcher.update.outer_middleware(AppearanceMiddleware())
+    dispatcher.include_router(appearance_router)
     dispatcher.include_router(router)
     return dispatcher
 
@@ -28,10 +30,10 @@ async def run_bot() -> None:
         logger.warning("BOT_TOKEN is not set — Telegram bot disabled.")
         return
 
-    bot = Bot(
-        token=settings.bot_token,
-        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
-    )
+    from shared.database import init_db
+    await init_db()
+    await cache.get()
+    bot = create_bot(settings.bot_token)
     dispatcher = build_dispatcher()
     logger.info("Starting Telegram bot polling…")
     try:
