@@ -12,8 +12,15 @@ backups/
 .venv/
 __pycache__/
 *.pyc
+.pytest_cache/
+
+# Local tool settings (machine-specific, may hold local paths/permissions)
+.claude/
 
 # Reflex build artifacts
 app/web/.web/
 app/web/.states/
 assets/external/
+
+# Runtime caches (animated Telegram emoji for the website)
+.cache/

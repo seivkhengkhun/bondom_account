@@ -88,7 +88,7 @@
                 </span>
               </div>
               <span class="badge {% if k.is_active %}badge-ok{% else %}badge-danger{% endif %}">
-                {{ "active" if k.is_active else "revoked" }}
+                {{ "Active" if k.is_active else "Revoked" }}
               </span>
               {% if k.is_active %}
                 <form method="post" action="/developer/keys/{{ k.id }}/revoke"

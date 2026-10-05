@@ -38,6 +38,7 @@ ACTION_MIN_QTY_CHANGE = "product.min_quantity"
 ACTION_PASSWORD_CHANGE = "admin.password_change"
 ACTION_LOGIN_FAILED = "admin.login_failed"
 ACTION_API_KEY_REVOKE = "api_key.revoke"
+ACTION_PROMO_CHANGE = "storefront.promo"
 
 
 @dataclass(frozen=True)

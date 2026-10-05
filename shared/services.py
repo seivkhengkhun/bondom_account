@@ -1310,6 +1310,61 @@ async def list_user_orders(
         return list(result.all())
 
 
+class OrderLine(NamedTuple):
+    product_id: int
+    name: str
+    quantity: int
+
+
+async def order_lines(
+    session: AsyncSession, order_ids: list[int]
+) -> dict[int, list[OrderLine]]:
+    """What each order contains, for customer order lists. Read-only.
+
+    Local-stock orders are read from their allocated inventory rows;
+    supplier orders (which hold no inventory until delivered) from their
+    fulfillment record. Canceled local orders released their rows, so they
+    come back empty and callers fall back to the order number.
+    """
+    if not order_ids:
+        return {}
+    out: dict[int, list[OrderLine]] = {}
+    async with transaction_scope(session):
+        local = await session.execute(
+            select(
+                Inventory.assigned_order_id,
+                Product.id,
+                Product.name,
+                func.count(Inventory.id),
+            )
+            .join(Product, Product.id == Inventory.product_id)
+            .where(Inventory.assigned_order_id.in_(order_ids))
+            .group_by(Inventory.assigned_order_id, Product.id, Product.name)
+        )
+        for order_id, product_id, name, qty in local.all():
+            out.setdefault(order_id, []).append(OrderLine(product_id, name, int(qty)))
+
+        supplied = await session.execute(
+            select(
+                SupplierFulfillment.order_id,
+                Product.id,
+                Product.name,
+                SupplierFulfillment.quantity,
+            )
+            .join(
+                SupplierProduct,
+                SupplierProduct.id == SupplierFulfillment.supplier_product_id,
+            )
+            .join(Product, Product.id == SupplierProduct.product_id)
+            .where(SupplierFulfillment.order_id.in_(order_ids))
+        )
+        for order_id, product_id, name, qty in supplied.all():
+            lines = out.setdefault(order_id, [])
+            if not any(line.product_id == product_id for line in lines):
+                lines.append(OrderLine(product_id, name, int(qty)))
+    return out
+
+
 async def list_orders(session: AsyncSession, limit: int = 200) -> list[Order]:
     """Recent orders with user preloaded (for the admin panel table)."""
     async with transaction_scope(session):

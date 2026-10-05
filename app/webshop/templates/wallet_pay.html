@@ -1,31 +1,30 @@
 {% extends "base.html" %}
-{% block title %}Top up ${{ amount }} — Bondom Account{% endblock %}
+{% block title %}Top up ${{ amount }} — Bondom{% endblock %}
+{% block body_class %}no-tabbar{% endblock %}
 {% block content %}
-  <div class="narrow">
-    <nav class="breadcrumb" aria-label="Breadcrumb">
+  <div class="narrow stack">
+    <nav class="breadcrumb" aria-label="Breadcrumb" style="margin-bottom:0">
       <a href="/wallet">Wallet</a>
       <span class="sep" aria-hidden="true">/</span>
       <span class="current">Top up ${{ amount }}</span>
     </nav>
 
-    <div class="card card-lg" style="text-align:center">
-      {% with reference = "Wallet top-up" %}
-        {% include "_khqr_card.html" %}
-      {% endwith %}
+    {% with reference = "Wallet top-up" %}
+      {% include "_khqr_card.html" %}
+    {% endwith %}
 
-      <div id="status" class="status status-waiting" role="status" aria-live="polite"
-           style="margin-block:var(--sp-5) var(--sp-3)">
+    <div class="card pay-card">
+      <div id="status" class="status status-waiting" role="status" aria-live="polite">
         <span class="spinner" aria-hidden="true"></span>
-        <span>Waiting for payment — updates automatically</span>
+        <span>Waiting for payment. This page updates by itself.</span>
       </div>
-
-      <div class="progress" aria-hidden="true">
-        <div class="progress-fill" id="expiry-fill"></div>
+      <div>
+        <div class="progress" aria-hidden="true"><div class="progress-fill" id="expiry-fill"></div></div>
+        <p class="field-hint" style="margin-top:var(--sp-2)">
+          <svg class="ic ic-sm" aria-hidden="true" style="display:inline;vertical-align:-0.2em"><use href="#i-clock"/></svg>
+          Code expires in <span id="expiry" class="num">—</span>
+        </p>
       </div>
-      <p class="field-hint" style="margin-top:var(--sp-2)">
-        <svg class="ic ic-sm" aria-hidden="true" style="vertical-align:-0.15em"><use href="#i-clock"/></svg>
-        QR expires in <span id="expiry" style="font-variant-numeric:tabular-nums">—</span>
-      </p>
     </div>
   </div>
 {% endblock %}
@@ -39,23 +38,21 @@
     var fill = document.getElementById("expiry-fill");
     var expiry = document.getElementById("expiry");
     var expired = false;
+    var settled = false;
 
     function tick() {
       var leftMs = Math.max(0, expiresAt - Date.now());
       var left = Math.floor(leftMs / 1000);
-      expiry.textContent =
-        Math.floor(left / 60) + "m " + String(left % 60).padStart(2, "0") + "s";
-
+      expiry.textContent = Math.floor(left / 60) + "m " + String(left % 60).padStart(2, "0") + "s";
       var pct = Math.max(0, Math.min(100, (leftMs / startMs) * 100));
       fill.style.width = pct + "%";
       fill.classList.toggle("is-low", pct < 20);
-
-      if (left === 0 && !expired) {
+      if (left === 0 && !expired && !settled) {
         expired = true;
         status.className = "status status-error";
         status.innerHTML =
           '<svg class="ic" aria-hidden="true"><use href="#i-clock"/></svg>' +
-          '<span>QR expired — <a href="/wallet">start a new top-up</a>.</span>';
+          '<span>This code expired. <a href="/wallet">Start a new top-up</a>.</span>';
       }
     }
     tick();
@@ -66,13 +63,12 @@
         var r = await fetch("/web/wallet/status/{{ topup.id }}");
         var data = await r.json();
         if (data.status === "paid") {
+          settled = true;
           status.className = "status status-ok";
           status.innerHTML =
             '<svg class="ic" aria-hidden="true"><use href="#i-check"/></svg>' +
-            '<span>Payment received — updating your balance…</span>';
-          setTimeout(function () {
-            location.href = "/wallet?success=Top-up+received";
-          }, 1000);
+            '<span>Payment received. Updating your balance…</span>';
+          setTimeout(function () { location.href = "/wallet?success=Top-up+received"; }, 1000);
           return;
         }
       } catch (e) { /* transient network error — keep polling */ }

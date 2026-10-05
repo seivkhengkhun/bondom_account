@@ -35,8 +35,8 @@
 
           <span class="badge {% if o.status.value == 'completed' %}badge-ok{% elif o.status.value == 'waiting_sms' %}badge-warn{% else %}badge-danger{% endif %}">
             {% if o.status.value == "waiting_sms" %}
-              <span class="dot dot-live"></span>waiting
-            {% else %}{{ o.status.value }}{% endif %}
+              <span class="dot dot-live"></span>Waiting
+            {% else %}{{ o.status.value | capitalize }}{% endif %}
           </span>
 
           <span class="lr-action">

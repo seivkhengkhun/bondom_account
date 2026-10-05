@@ -30,7 +30,7 @@ import reflex as rx
 from aiogram import Bot
 
 from shared import admin_auth, audit, pandora, payment_service, services
-from shared import bot_appearance
+from shared import bot_appearance, storefront_promos
 from app.bot.appearance import create_bot, current, emoji, validate_custom_emoji, cache
 from shared.config import settings
 from shared.database import AsyncSessionLocal
@@ -131,6 +131,14 @@ class PandoraOrderRow:
     supplier_total: str
     status: str
     failure: str
+
+
+@dataclasses.dataclass
+class PromoRow:
+    slot: int
+    title: str
+    target: str
+    status: str  # "Live", "Off", or why it is not showing
 
 
 @dataclasses.dataclass
@@ -239,6 +247,24 @@ class AdminState(rx.State):
     animated_emoji_enabled: bool = True
     emoji_message: str = ""
     emoji_preview_chat: str = ""
+    # Storefront promotion editor (Marketing tab)
+    promo_rows: list[PromoRow] = []
+    promo_slot_options: list[str] = [
+        str(n) for n in range(1, storefront_promos.SLOT_COUNT + 1)
+    ]
+    promo_slot: str = "1"
+    promo_enabled: bool = False
+    promo_title: str = ""
+    promo_subtitle: str = ""
+    promo_target_kind: str = "product"
+    promo_target_product: str = ""
+    promo_target_category: str = ""
+    promo_cta: str = ""
+    promo_tone: str = "brand"
+    promo_tone_options: list[str] = list(storefront_promos.TONES)
+    promo_emoji: str = "none"
+    promo_emoji_options: list[str] = ["none", *bot_appearance.DEFAULTS]
+    promo_message: str = ""
     orders_message: str = ""
     announcement_text: str = ""
     announcement_message: str = ""
@@ -789,6 +815,7 @@ class AdminState(rx.State):
             )
             self.bot_show_stock = await services.get_bot_show_stock(session)
             entries = await audit.list_entries(session, limit=400)
+        await self.load_promos()
         self.audit_rows = [
             AuditRow(
                 id=e.id,
@@ -1878,6 +1905,159 @@ class AdminState(rx.State):
             f"🧹 Cleared {deleted} order(s). Revenue now starts from this point."
         )
         await self.load_all()
+
+    # ----------------------------------------------------------------- #
+    # Storefront promotions
+    # ----------------------------------------------------------------- #
+    async def load_promos(self) -> None:
+        if not self.authed:
+            return
+        async with AsyncSessionLocal() as session:
+            slots = await storefront_promos.load_slots(session)
+            overviews = await services.list_product_overviews(session)
+        active = [o for o in overviews if o.product.is_active]
+        live = {r.slot for r in storefront_promos.resolve(slots, active)}
+        names = {o.product.id: o.product.name for o in overviews}
+        rows = []
+        for slot in slots:
+            if slot.target_kind == "product" and slot.target.isdigit():
+                target = f"Product: {names.get(int(slot.target), 'deleted product')}"
+            elif slot.target:
+                target = f"Category: {slot.target}"
+            else:
+                target = "—"
+            if not slot.enabled:
+                status = "Off"
+            elif slot.slot in live:
+                status = "Live"
+            else:
+                status = "Hidden: target inactive, empty or sold out"
+            rows.append(PromoRow(slot.slot, slot.title or "—", target, status))
+        self.promo_rows = rows
+        self._fill_promo_form(slots[int(self.promo_slot) - 1], names)
+
+    def _fill_promo_form(self, slot, names: dict[int, str]) -> None:
+        self.promo_enabled = slot.enabled
+        self.promo_title = slot.title
+        self.promo_subtitle = slot.subtitle
+        self.promo_target_kind = slot.target_kind
+        # Same "id — name" label as product_options, built from fresh data
+        # because load_all fills product_options after this runs.
+        self.promo_target_product = (
+            f"{slot.target} — {names[int(slot.target)]}"
+            if slot.target_kind == "product"
+            and slot.target.isdigit()
+            and int(slot.target) in names
+            else ""
+        )
+        self.promo_target_category = (
+            slot.target if slot.target_kind == "category" else ""
+        )
+        self.promo_cta = slot.cta_label
+        self.promo_tone = slot.tone
+        self.promo_emoji = slot.emoji_slot or "none"
+
+    async def select_promo_slot(self, value: str) -> None:
+        if not self.authed or value not in self.promo_slot_options:
+            return
+        self.touch()
+        self.promo_slot = value
+        self.promo_message = ""
+        await self.load_promos()
+
+    def set_promo_enabled(self, value: bool) -> None:
+        if self.authed:
+            self.promo_enabled = value
+
+    def set_promo_title(self, value: str) -> None:
+        if self.authed:
+            self.promo_title = value
+
+    def set_promo_subtitle(self, value: str) -> None:
+        if self.authed:
+            self.promo_subtitle = value
+
+    def set_promo_target_kind(self, value: str) -> None:
+        if self.authed and value in storefront_promos.TARGET_KINDS:
+            self.promo_target_kind = value
+
+    def set_promo_target_product(self, value: str) -> None:
+        if self.authed:
+            self.promo_target_product = value
+
+    def set_promo_target_category(self, value: str) -> None:
+        if self.authed:
+            self.promo_target_category = value
+
+    def set_promo_cta(self, value: str) -> None:
+        if self.authed:
+            self.promo_cta = value
+
+    def set_promo_tone(self, value: str) -> None:
+        if self.authed and value in storefront_promos.TONES:
+            self.promo_tone = value
+
+    def set_promo_emoji(self, value: str) -> None:
+        if self.authed:
+            self.promo_emoji = value
+
+    async def save_promo(self) -> None:
+        if not self.authed:
+            return
+        self.touch()
+        if self.promo_target_kind == "product":
+            target = self.promo_target_product.split(" — ", 1)[0]
+        else:
+            target = self.promo_target_category
+        try:
+            async with AsyncSessionLocal() as session:
+                saved = await storefront_promos.save_slot(
+                    session,
+                    storefront_promos.PromoSlot(
+                        slot=int(self.promo_slot),
+                        enabled=self.promo_enabled,
+                        title=self.promo_title,
+                        subtitle=self.promo_subtitle,
+                        target_kind=self.promo_target_kind,
+                        target=target,
+                        cta_label=self.promo_cta,
+                        tone=self.promo_tone,
+                        emoji_slot="" if self.promo_emoji == "none" else self.promo_emoji,
+                    ),
+                )
+        except ValueError as exc:
+            self.promo_message = f"⚠ {exc}"
+            return
+        await audit.log_action(
+            audit.ACTION_PROMO_CHANGE,
+            target_type="promo",
+            target_id=saved.slot,
+            summary=(
+                f"Slot {saved.slot} {'on' if saved.enabled else 'off'}: "
+                f"{saved.title or '(untitled)'} → {saved.target_kind} {saved.target}"
+            ),
+        )
+        await self.load_promos()
+        self.promo_message = (
+            "Saved. The website shows it on the next page load."
+            if saved.enabled
+            else "Saved as off. It is not shown on the website."
+        )
+
+    async def clear_promo(self) -> None:
+        if not self.authed:
+            return
+        self.touch()
+        async with AsyncSessionLocal() as session:
+            await storefront_promos.clear_slot(session, int(self.promo_slot))
+        await audit.log_action(
+            audit.ACTION_PROMO_CHANGE,
+            target_type="promo",
+            target_id=self.promo_slot,
+            summary=f"Slot {self.promo_slot} cleared",
+        )
+        await self.load_promos()
+        self.promo_message = "Slot cleared."
 
     async def load_appearance(self) -> None:
         if not self.authed:
@@ -3273,8 +3453,149 @@ def appearance_tab() -> rx.Component:
     )
 
 
+def _promo_row(r: PromoRow) -> rx.Component:
+    return rx.table.row(
+        rx.table.cell(rx.text(r.slot, color_scheme="gray")),
+        rx.table.cell(rx.text(r.title, weight="medium")),
+        rx.table.cell(rx.text(r.target, size="2")),
+        rx.table.cell(
+            rx.badge(
+                r.status,
+                color_scheme=rx.match(r.status, ("Live", "green"), ("Off", "gray"), "amber"),
+                variant="soft",
+            )
+        ),
+        align="center",
+    )
+
+
+def storefront_promos_card() -> rx.Component:
+    return rx.card(
+        rx.vstack(
+            card_header(
+                "panels-top-left",
+                "Website promotions",
+                "Up to three banners on the storefront home page. Each one links to a real product or category.",
+            ),
+            rx.hstack(
+                rx.text("Slot", weight="medium"),
+                rx.select(
+                    AdminState.promo_slot_options,
+                    value=AdminState.promo_slot,
+                    on_change=AdminState.select_promo_slot,
+                ),
+                rx.switch(
+                    checked=AdminState.promo_enabled,
+                    on_change=AdminState.set_promo_enabled,
+                ),
+                rx.text("Show on website", size="2"),
+                spacing="3",
+                align="center",
+                wrap="wrap",
+            ),
+            rx.input(
+                placeholder=f"Title (max {storefront_promos.MAX_TITLE} characters)",
+                value=AdminState.promo_title,
+                on_change=AdminState.set_promo_title,
+                max_length=storefront_promos.MAX_TITLE,
+                width="100%",
+            ),
+            rx.input(
+                placeholder=f"Short supporting line (optional, max {storefront_promos.MAX_SUBTITLE})",
+                value=AdminState.promo_subtitle,
+                on_change=AdminState.set_promo_subtitle,
+                max_length=storefront_promos.MAX_SUBTITLE,
+                width="100%",
+            ),
+            rx.hstack(
+                rx.select(
+                    ["product", "category"],
+                    value=AdminState.promo_target_kind,
+                    on_change=AdminState.set_promo_target_kind,
+                ),
+                rx.cond(
+                    AdminState.promo_target_kind == "product",
+                    rx.select(
+                        AdminState.product_options,
+                        value=AdminState.promo_target_product,
+                        on_change=AdminState.set_promo_target_product,
+                        placeholder="Choose a product…",
+                    ),
+                    rx.select(
+                        AdminState.categories,
+                        value=AdminState.promo_target_category,
+                        on_change=AdminState.set_promo_target_category,
+                        placeholder="Choose a category…",
+                    ),
+                ),
+                spacing="3",
+                wrap="wrap",
+                width="100%",
+            ),
+            rx.hstack(
+                rx.input(
+                    placeholder="Button label (optional)",
+                    value=AdminState.promo_cta,
+                    on_change=AdminState.set_promo_cta,
+                    max_length=storefront_promos.MAX_CTA,
+                ),
+                rx.text("Style", size="2"),
+                rx.select(
+                    AdminState.promo_tone_options,
+                    value=AdminState.promo_tone,
+                    on_change=AdminState.set_promo_tone,
+                ),
+                rx.text("Animated emoji", size="2"),
+                rx.select(
+                    AdminState.promo_emoji_options,
+                    value=AdminState.promo_emoji,
+                    on_change=AdminState.set_promo_emoji,
+                ),
+                spacing="3",
+                align="center",
+                wrap="wrap",
+            ),
+            rx.text(
+                "Price and stock always come from the product itself. A promotion for a hidden, "
+                "sold-out or empty target is skipped automatically. The emoji uses the matching "
+                "Bot Appearance slot.",
+                size="2",
+                color_scheme="gray",
+            ),
+            rx.hstack(
+                rx.button("Save promotion", on_click=AdminState.save_promo),
+                rx.button("Clear slot", on_click=AdminState.clear_promo, variant="soft", color_scheme="gray"),
+                spacing="3",
+            ),
+            section_message(AdminState.promo_message),
+            rx.box(
+                rx.table.root(
+                    rx.table.header(
+                        rx.table.row(
+                            *[
+                                rx.table.column_header_cell(label)
+                                for label in ["Slot", "Title", "Links to", "Status"]
+                            ]
+                        )
+                    ),
+                    rx.table.body(rx.foreach(AdminState.promo_rows, _promo_row)),
+                    variant="surface",
+                    width="100%",
+                ),
+                overflow_x="auto",
+                width="100%",
+            ),
+            spacing="3",
+            width="100%",
+        ),
+        size="3",
+        width="100%",
+    )
+
+
 def marketing_tab() -> rx.Component:
     return rx.vstack(
+        storefront_promos_card(),
         rx.card(
             rx.vstack(
                 card_header(

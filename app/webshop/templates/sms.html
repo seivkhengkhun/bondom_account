@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "_ui.html" as ui with context %}
 {% block title %}SMS Numbers — Bondom Account{% endblock %}
 {% block content %}
   <section class="sms-hero">
@@ -44,10 +45,7 @@
   {% if not session_user %}
     <div class="signin-panel" id="signin" style="margin-bottom:var(--sp-6)">
       <p>Sign in with Telegram to rent a number.</p>
-      <script async src="https://telegram.org/js/telegram-widget.js?22"
-              data-telegram-login="{{ bot_username }}"
-              data-size="large" data-auth-url="{{ auth_url }}"
-              data-request-access="write"></script>
+      {{ ui.tg_login(autoload=True) }}
     </div>
   {% endif %}
 
@@ -60,6 +58,7 @@
     {% endfor %}
   </div>
 
+  <h2 class="sr-only">Available numbers</h2>
   <div class="grid" id="sms-grid">
     {% for category, offers in stock.items() %}
       {% for offer in offers %}
@@ -102,7 +101,7 @@
                 <a class="btn btn-outline btn-sm" href="/wallet">Top up</a>
               {% endif %}
             {% else %}
-              <a class="btn btn-outline btn-sm" href="#signin">Sign in</a>
+              <button class="btn btn-outline btn-sm" type="button" data-open-dialog="signin-dialog">Sign in</button>
             {% endif %}
           </div>
         </div>

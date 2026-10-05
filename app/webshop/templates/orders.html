@@ -1,57 +1,60 @@
 {% extends "base.html" %}
-{% block title %}My Orders — Bondom Account{% endblock %}
+{% import "_ui.html" as ui with context %}
+{% block title %}My orders — Bondom{% endblock %}
 {% block content %}
+  {% set labels = {"pending": "Awaiting payment", "paid": "Processing", "delivered": "Delivered", "canceled": "Canceled"} %}
+  {% set tones = {"pending": "badge-warn", "paid": "badge-warn", "delivered": "badge-ok", "canceled": "badge-danger"} %}
   <div class="page-head">
     <div>
-      <h1>My Orders</h1>
-      <p class="sub">Every purchase you have made, on the website or in the bot.</p>
+      <h1>My orders</h1>
+      <p class="sub">Purchases from this website and the Telegram bot, newest first.</p>
     </div>
-    <div class="balance-card" style="min-width:auto">
-      <span class="eyebrow">Wallet balance</span>
-      <span class="balance-amount" style="font-size:var(--fs-xl)">${{ balance }}</span>
-      <a class="btn btn-primary btn-sm" href="/wallet" style="margin-top:var(--sp-2)">
-        <svg class="ic ic-sm" aria-hidden="true"><use href="#i-plus"/></svg> Top up
-      </a>
-    </div>
+    <a class="balance-chip only-narrow" href="/wallet">
+      <svg class="ic ic-sm" aria-hidden="true"><use href="#i-wallet"/></svg>
+      Wallet ${{ balance }}
+    </a>
   </div>
 
   {% if orders %}
     <div class="list">
       {% for o in orders %}
-        <a class="card card-interactive list-row reveal"
-           href="{% if o.status.value == 'pending' %}/pay/{{ o.id }}{% else %}/order/{{ o.id }}{% endif %}">
+        {% set ls = lines.get(o.id, []) %}
+        {% set st = o.status.value %}
+        <a class="card card-interactive list-row"
+           href="{% if st == 'pending' %}/pay/{{ o.id }}{% else %}/order/{{ o.id }}{% endif %}">
           <div class="lr-main">
-            <span class="lr-title">Order #{{ o.id }}</span>
-            <span class="lr-sub">{{ o.created_at.strftime("%d %b %Y, %H:%M") }}</span>
+            {# Quantity sits in the sub-line, which never truncates, so a long
+               product name can't hide it. #}
+            <span class="lr-title">
+              {% if ls %}{{ ls | map(attribute="name") | join(", ") }}{% else %}Order #{{ o.id }}{% endif %}
+            </span>
+            <span class="lr-sub">
+              {%- if ls %}&times; {{ ls | sum(attribute="quantity") }} &middot; {% endif -%}
+              #{{ o.id }} &middot; {{ o.created_at.strftime("%d %b %Y, %H:%M") }}
+            </span>
           </div>
-
           <span class="lr-amount">${{ o.total_price }}</span>
-
-          <span class="badge {% if o.status.value == 'delivered' %}badge-ok{% elif o.status.value == 'pending' %}badge-warn{% elif o.status.value == 'canceled' %}badge-danger{% endif %}">
-            {% if o.status.value == 'pending' %}
-              <span class="dot dot-live"></span>
-            {% endif %}
-            {{ o.status.value }}
+          <span class="badge {{ tones.get(st, '') }}">
+            {% if st == "pending" %}<span class="dot dot-live"></span>{% endif %}
+            {{ labels.get(st, st) }}
           </span>
-
           <span class="lr-action">
-            {% if o.status.value == "pending" %}Pay now{% else %}View{% endif %}
+            {% if st == "pending" %}Pay now{% else %}View{% endif %}
             <svg class="ic ic-sm" aria-hidden="true"><use href="#i-arrow-right"/></svg>
           </span>
         </a>
       {% endfor %}
     </div>
+    {% if orders | length >= 20 %}
+      <p class="field-hint" style="margin-top:var(--sp-4)">Showing your 20 most recent orders.</p>
+    {% endif %}
   {% else %}
     <div class="card card-lg">
       <div class="empty-state">
-        <span class="empty-icon"><svg class="ic" aria-hidden="true"><use href="#i-package"/></svg></span>
+        <span class="empty-icon">{{ ui.anim_or_icon("orders", "package") }}</span>
         <h2 style="font-size:var(--fs-lg)">No orders yet</h2>
-        <p class="muted">Your purchases will appear here — from both the website
-          and the Telegram bot.</p>
-        <a class="btn btn-primary" href="/">
-          Browse the catalog
-          <svg class="ic ic-sm" aria-hidden="true"><use href="#i-arrow-right"/></svg>
-        </a>
+        <p class="muted">Orders you place here or in the Telegram bot will be listed on this page.</p>
+        <a class="btn btn-primary" href="/shop">Browse products <svg class="ic ic-sm" aria-hidden="true"><use href="#i-arrow-right"/></svg></a>
       </div>
     </div>
   {% endif %}

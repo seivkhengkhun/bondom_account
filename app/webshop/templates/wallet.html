@@ -1,69 +1,55 @@
 {% extends "base.html" %}
-{% block title %}Wallet — Bondom Account{% endblock %}
+{% import "_ui.html" as ui with context %}
+{% block title %}Wallet — Bondom{% endblock %}
 {% block content %}
-  {# Scrolling notice. Uses a CSS animation rather than the obsolete
-     <marquee> tag, and the text is duplicated so the loop has no visible
-     gap. role="alert" is deliberately avoided — it would interrupt a
-     screen reader on every page load; the static copy below carries the
-     same wording for assistive tech and for reduced-motion users. #}
-  <div class="notice-marquee" aria-hidden="true">
-    <div class="notice-marquee-track">
-      {% for _ in range(2) %}
-        <span class="notice-marquee-item">
-          <svg class="ic ic-sm" aria-hidden="true"><use href="#i-alert"/></svg>
-          <b>Important Notice:</b> Please do not top up more than you need or
-          intend to use. This policy helps prevent money laundering and other
-          fraudulent activity. We are <b>not responsible for, and will not
-          provide refunds for</b>, any unused balance or excess funds added to
-          your account.
-        </span>
-      {% endfor %}
+  <div class="narrow stack">
+    <div class="page-head" style="margin-bottom:0">
+      <div>
+        <h1>Wallet</h1>
+        <p class="sub">Used for SMS numbers on this website and for one-tap purchases in the Telegram bot.</p>
+      </div>
     </div>
-  </div>
-  <p class="sr-only">
-    Important notice: please do not top up more than you need or intend to
-    use. This policy helps prevent money laundering and other fraudulent
-    activity. We are not responsible for, and will not provide refunds for,
-    any unused balance or excess funds added to your account.
-  </p>
 
-  <div class="narrow stack-lg">
+    {# Policy text: the wording is unchanged from the previous scrolling
+       notice, now static so everyone can read it at their own pace. #}
+    <div class="notice" role="note">
+      <svg class="ic ic-sm" aria-hidden="true"><use href="#i-alert"/></svg>
+      <p><b>Important notice:</b> Please do not top up more than you need or intend to use.
+        This policy helps prevent money laundering and other fraudulent activity. We are
+        <b>not responsible for, and will not provide refunds for</b>, any unused balance or
+        excess funds added to your account.</p>
+    </div>
+
     <div class="balance-card">
-      <span class="eyebrow">Wallet balance</span>
+      <span class="meta row" style="gap:var(--sp-2)">{{ ui.anim_or_icon("balance", "wallet") }} Balance</span>
       <p class="balance-amount">${{ balance }}</p>
-      <p class="text-sm">Spendable everywhere — website, SMS numbers and
-        the Telegram bot.</p>
       {% if sms_enabled %}
         <div class="row" style="margin-top:var(--sp-2)">
-          <a class="btn btn-primary btn-sm" href="/sms">
-            <svg class="ic ic-sm" aria-hidden="true"><use href="#i-phone"/></svg>
-            Spend on SMS numbers
+          <a class="btn btn-outline btn-sm" href="/sms">
+            <svg class="ic ic-sm" aria-hidden="true"><use href="#i-phone"/></svg> Use for SMS numbers
           </a>
         </div>
       {% endif %}
     </div>
 
-    <div class="card card-lg">
-      <h2 class="section-title" style="font-size:var(--fs-lg);margin-bottom:var(--sp-4)">Add funds</h2>
+    <section class="card card-lg" aria-labelledby="topup-heading">
+      <h2 id="topup-heading" style="font-size:var(--fs-lg);margin-bottom:var(--sp-4)">Add funds</h2>
 
       {% if success %}
-        <p class="alert alert-ok" role="status" style="margin-top:var(--sp-4)">
-          <svg class="ic" aria-hidden="true"><use href="#i-check"/></svg>
-          <span>{{ success }}</span>
+        <p class="alert alert-ok" role="status" style="margin-bottom:var(--sp-4)">
+          <svg class="ic" aria-hidden="true"><use href="#i-check"/></svg><span>{{ success }}</span>
         </p>
       {% endif %}
       {% if error %}
-        <p class="alert alert-error" role="alert" style="margin-top:var(--sp-4)">
-          <svg class="ic" aria-hidden="true"><use href="#i-alert"/></svg>
-          <span>{{ error }}</span>
+        <p class="alert alert-error" role="alert" style="margin-bottom:var(--sp-4)">
+          <svg class="ic" aria-hidden="true"><use href="#i-alert"/></svg><span>{{ error }}</span>
         </p>
       {% endif %}
 
-      <form method="post" action="/web/wallet/topup" id="topup-form"
-            class="stack">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <form method="post" action="/web/wallet/topup" id="topup-form" class="stack">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <div class="field">
-          <label class="label" for="amount">Top-up amount</label>
+          <label class="label" for="amount">Amount (USD)</label>
           <div class="input-prefixed">
             <span class="prefix" aria-hidden="true">$</span>
             <input class="input" id="amount" name="amount" type="number"
@@ -71,56 +57,29 @@
                    placeholder="{{ min_topup }}" required
                    inputmode="decimal" aria-describedby="amount-hint">
           </div>
-          <p class="field-hint" id="amount-hint">
-            Minimum ${{ min_topup_label }} &middot; maximum ${{ max_topup }}.00
-          </p>
+          <p class="field-hint" id="amount-hint">Minimum ${{ min_topup_label }} &middot; maximum ${{ max_topup }}.00</p>
           {% if topup_override %}
-            <p class="field-hint" style="color:var(--accent-text)">
-              <svg class="ic ic-sm" aria-hidden="true" style="vertical-align:-0.15em"><use href="#i-info"/></svg>
-              An administrator has lowered the minimum on your account.
-            </p>
+            <p class="field-hint" style="color:var(--green-soft)">An administrator has lowered the minimum for your account.</p>
           {% endif %}
           <p class="field-error" id="amount-error" hidden>
-            <svg class="ic ic-sm" aria-hidden="true"><use href="#i-alert"/></svg>
-            <span></span>
+            <svg class="ic ic-sm" aria-hidden="true"><use href="#i-alert"/></svg><span></span>
           </p>
         </div>
 
-        <div class="row" style="gap:var(--sp-2)">
-          {% for preset in presets %}
-            <button type="button" class="pill" data-amount="{{ preset }}">${{ preset }}.00</button>
-          {% endfor %}
-        </div>
+        {% if presets %}
+          <div class="row" style="gap:var(--sp-2)" role="group" aria-label="Quick amounts">
+            {% for preset in presets %}
+              <button type="button" class="pill" data-amount="{{ preset }}" aria-pressed="false">${{ preset }}</button>
+            {% endfor %}
+          </div>
+        {% endif %}
 
         <button type="submit" class="btn btn-primary btn-lg btn-block" id="topup-submit">
-          <svg class="ic" aria-hidden="true"><use href="#i-qr"/></svg>
-          Top up with KHQR
+          <svg class="ic" aria-hidden="true"><use href="#i-qr"/></svg> Top up with KHQR
         </button>
+        <p class="field-hint">Scan with any Cambodian banking app. Your balance is credited automatically once the payment is confirmed.</p>
       </form>
-
-      <p class="field-hint" style="margin-top:var(--sp-3)">
-        Scan with ABA, ACLEDA, Wing, Bakong or any Cambodian banking app.
-        Your balance is credited automatically once payment confirms.
-      </p>
-    </div>
-
-    <div class="card">
-      <h2 style="font-size:var(--fs-md);margin-bottom:var(--sp-4)">How your wallet works</h2>
-      <div class="how-steps">
-        <div class="how-step">
-          <span class="how-num">1</span>
-          <p>Top up any amount by scanning a KHQR with your banking app.</p>
-        </div>
-        <div class="how-step">
-          <span class="how-num">2</span>
-          <p>Your balance is credited automatically — usually within seconds.</p>
-        </div>
-        <div class="how-step">
-          <span class="how-num">3</span>
-          <p>Spend it instantly on SMS numbers without scanning again.</p>
-        </div>
-      </div>
-    </div>
+    </section>
   </div>
 {% endblock %}
 
@@ -131,18 +90,17 @@
     // backend check in payment_service.topup_amount_error().
     var MIN = {{ min_topup }};
     var MAX = {{ max_topup }};
-
     var form = document.getElementById("topup-form");
     var input = document.getElementById("amount");
     var submit = document.getElementById("topup-submit");
     var err = document.getElementById("amount-error");
     var errText = err.querySelector("span");
+    var presets = document.querySelectorAll("[data-amount]");
 
-    document.querySelectorAll("[data-amount]").forEach(function (b) {
+    presets.forEach(function (b) {
       b.addEventListener("click", function () {
         input.value = parseFloat(b.dataset.amount).toFixed(2);
         validate();
-        input.focus();
       });
     });
 
@@ -157,16 +115,15 @@
 
     function validate(showEmpty) {
       var message = problem();
-      // Don't shout at an untouched empty field.
-      var invalid = message !== "" &&
-        (showEmpty || input.value.trim() !== "");
-
+      var invalid = message !== "" && (showEmpty || input.value.trim() !== "");
       err.hidden = !invalid;
       input.setAttribute("aria-invalid", invalid ? "true" : "false");
       if (invalid) errText.textContent = message;
-
-      // Keep the button visibly unavailable until the amount is valid.
       submit.setAttribute("aria-disabled", message === "" ? "false" : "true");
+      var v = parseFloat(input.value);
+      presets.forEach(function (b) {
+        b.setAttribute("aria-pressed", String(parseFloat(b.dataset.amount) === v));
+      });
       return message === "";
     }
 
@@ -175,13 +132,9 @@
     validate(false);
 
     form.addEventListener("submit", function (e) {
-      if (!validate(true)) {
-        e.preventDefault();
-        input.focus();
-        return;
-      }
+      if (!validate(true)) { e.preventDefault(); input.focus(); return; }
       submit.setAttribute("aria-disabled", "true");
-      submit.innerHTML = '<span class="spinner"></span> Generating QR…';
+      submit.innerHTML = '<span class="spinner"></span> Generating code…';
     });
   })();
 </script>

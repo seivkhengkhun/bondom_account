@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% import "_ui.html" as ui with context %}
+{% block body_class %}page-shop{% endblock %}
+{% block title %}{% if cat %}{{ cat | capitalize }} — {% endif %}{% if q %}“{{ q }}” — {% endif %}Shop — Bondom{% endblock %}
+{% block content %}
+  {% macro shop_url(c, s=sort) -%}
+    {%- set params = {} -%}
+    {%- if c %}{% set _ = params.update({"cat": c}) %}{% endif -%}
+    {%- if q %}{% set _ = params.update({"q": q}) %}{% endif -%}
+    {%- if s %}{% set _ = params.update({"sort": s}) %}{% endif -%}
+    /shop{% if params %}?{{ params | urlencode }}{% endif %}
+  {%- endmacro %}
+
+  <div class="page-head" style="margin-bottom:var(--sp-5)">
+    <div>
+      <p class="meta">Shop</p>
+      <h1 style="text-transform:{% if cat %}capitalize{% else %}none{% endif %}">
+        {% if cat %}{{ cat }}{% else %}All products{% endif %}
+      </h1>
+    </div>
+  </div>
+
+  <div class="shop-layout">
+    <nav class="shop-side" aria-label="Categories">
+      <p class="meta side-title">Categories</p>
+      <a class="side-link" href="{{ shop_url('') }}" {% if not cat %}aria-current="page"{% endif %}>
+        All products <span class="pill-count">{{ total }}</span>
+      </a>
+      {% for name, count in categories %}
+        <a class="side-link" href="{{ shop_url(name) }}" {% if cat == name %}aria-current="page"{% endif %}>
+          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ name }}</span>
+          <span class="pill-count">{{ count }}</span>
+        </a>
+      {% endfor %}
+    </nav>
+
+    <div>
+      <nav class="filter-bar shop-cats" aria-label="Categories">
+        <a class="chip" href="{{ shop_url('') }}" {% if not cat %}aria-current="page"{% endif %}>All <span class="pill-count">{{ total }}</span></a>
+        {% for name, count in categories %}
+          <a class="chip" href="{{ shop_url(name) }}" {% if cat == name %}aria-current="page"{% endif %} style="text-transform:capitalize">
+            {{ name }} <span class="pill-count">{{ count }}</span>
+          </a>
+        {% endfor %}
+      </nav>
+
+      <form class="shop-toolbar" action="/shop" method="get" role="search">
+        {% if cat %}<input type="hidden" name="cat" value="{{ cat }}">{% endif %}
+        <div class="search-field">
+          <svg class="ic ic-sm ic-search" aria-hidden="true"><use href="#i-search"/></svg>
+          <label class="sr-only" for="shop-q">Search {% if cat %}in {{ cat }}{% else %}products{% endif %}</label>
+          <input class="input" id="shop-q" name="q" type="search" value="{{ q }}" autocomplete="off"
+                 placeholder="Search {% if cat %}in {{ cat }}{% else %}products{% endif %}"
+                 enterkeyhint="search" data-live-filter>
+        </div>
+        <label class="sr-only" for="shop-sort">Sort by</label>
+        <select class="input" id="shop-sort" name="sort" onchange="this.form.submit()">
+          {% for key, label in sorts %}
+            <option value="{{ key }}" {% if key == sort %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+        <noscript><button class="btn" type="submit">Apply</button></noscript>
+      </form>
+
+      <p class="result-count" aria-live="polite" data-result-count>
+        {{ results | length }} product{{ "" if results | length == 1 else "s" }}{% if q %} for “{{ q }}”{% endif %}
+      </p>
+
+      <h2 class="sr-only">Products</h2>
+      {% if results %}
+        <div class="grid">
+          {% for o in results %}{{ ui.product_card(o, show_stock) }}{% endfor %}
+        </div>
+      {% endif %}
+
+      <div class="card" {% if results %}hidden{% endif %} data-live-empty>
+        <div class="empty-state">
+          <span class="empty-icon">{{ ui.anim_or_icon("shop", "search") }}</span>
+          <h2 style="font-size:var(--fs-lg)">No products match{% if q %} “{{ q }}”{% endif %}</h2>
+          <p class="muted">Try a shorter search or another category. Stock is added regularly.</p>
+          <a class="btn btn-outline" href="/shop">Clear search and filters</a>
+        </div>
+      </div>
+    </div>
+  </div>
+{% endblock %}

@@ -1,51 +1,68 @@
 {% extends "base.html" %}
-{% block title %}Pay order #{{ order.id }} — Bondom Account{% endblock %}
+{% import "_ui.html" as ui with context %}
+{% block title %}Pay order #{{ order.id }} — Bondom{% endblock %}
+{% block body_class %}no-tabbar{% endblock %}
 {% block content %}
-  <div class="narrow">
-    <ol class="steps" aria-label="Checkout progress">
-      <li class="is-done">
-        <span class="step-dot"><svg class="ic ic-sm" aria-hidden="true"><use href="#i-check"/></svg></span>
-        Order created
-      </li>
+  <h1 class="sr-only">Scan to pay for order #{{ order.id }}</h1>
+  <div class="pay-layout">
+    <ol class="steps pay-steps" aria-label="Checkout progress">
+      <li class="is-done"><span class="step-dot"><svg class="ic ic-sm" aria-hidden="true"><use href="#i-check"/></svg></span>Order created</li>
       <li class="is-active" id="step-pay"><span class="step-dot">2</span>Scan &amp; pay</li>
       <li id="step-done"><span class="step-dot">3</span>Delivered</li>
     </ol>
 
-    <div class="card card-lg card-accent" style="text-align:center">
-      <div class="pay-head">
-        <div>
-          <span class="eyebrow">Order</span>
-          <p class="pay-order">#{{ order.id }}</p>
-        </div>
-        <div style="text-align:right">
-          <span class="eyebrow">Amount due</span>
-          <p class="price price-lg">${{ order.total_price }}</p>
-        </div>
-      </div>
-
+    <div class="pay-qr">
       {% with reference = "Order #" ~ order.id %}
         {% include "_khqr_card.html" %}
       {% endwith %}
-
-      <div id="status" class="status status-waiting" role="status" aria-live="polite"
-           style="margin-block:var(--sp-5) var(--sp-3)">
-        <span class="spinner" aria-hidden="true"></span>
-        <span>Waiting for payment — this page updates itself</span>
-      </div>
-
-      <div class="progress" aria-hidden="true">
-        <div class="progress-fill" id="expiry-fill"></div>
-      </div>
-      <p class="field-hint" style="margin-top:var(--sp-2)">
-        <svg class="ic ic-sm" aria-hidden="true" style="vertical-align:-0.15em"><use href="#i-clock"/></svg>
-        QR expires in <span id="expiry" style="font-variant-numeric:tabular-nums">15m 00s</span>
-      </p>
     </div>
 
-    <p class="muted text-sm" style="text-align:center;margin-top:var(--sp-4)">
-      Paid but nothing happened? Your items are also sent to
-      <a href="https://t.me/{{ bot_username }}">@{{ bot_username }}</a>.
-    </p>
+    <div class="pay-side stack">
+      <div class="card pay-card">
+        <div class="pay-head">
+          <div style="min-width:0">
+            <span class="meta">Order</span>
+            <p class="pay-order">#{{ order.id }}</p>
+            {% if lines %}
+              <ul class="pay-lines">
+                {% for l in lines %}<li>{{ l.name }} <span class="num">&times; {{ l.quantity }}</span></li>{% endfor %}
+              </ul>
+            {% endif %}
+          </div>
+          <div style="text-align:right">
+            <span class="meta">Amount due</span>
+            <p class="price price-xl">${{ order.total_price }}</p>
+          </div>
+        </div>
+
+        <div id="status" class="status status-waiting" role="status" aria-live="polite">
+          <span class="spinner" aria-hidden="true"></span>
+          <span>Waiting for payment. This page updates by itself.</span>
+        </div>
+
+        <div>
+          <div class="progress" aria-hidden="true"><div class="progress-fill" id="expiry-fill"></div></div>
+          <p class="field-hint" style="margin-top:var(--sp-2)">
+            <svg class="ic ic-sm" aria-hidden="true" style="display:inline;vertical-align:-0.2em"><use href="#i-clock"/></svg>
+            Code expires in <span id="expiry" class="num">15m 00s</span>
+          </p>
+        </div>
+      </div>
+
+      <div class="card">
+        <p class="meta" style="margin-bottom:var(--sp-3)">What happens next</p>
+        <ol class="next-steps">
+          <li><span class="step-dot">1</span><span>Open your banking app (ABA, ACLEDA, Wing, Bakong…) and scan the code. On the same phone, most apps can also scan a saved screenshot from your gallery.</span></li>
+          <li><span class="step-dot">2</span><span>Pay exactly <b class="num" style="color:var(--text)">${{ order.total_price }}</b>. This page notices the payment on its own.</span></li>
+          <li><span class="step-dot">3</span><span>Your items open on the order page and are sent to your Telegram chat.</span></li>
+        </ol>
+      </div>
+
+      <p class="muted text-sm">
+        Paid but nothing happened? Open <a href="/order/{{ order.id }}">order #{{ order.id }}</a>{% if bot_username %}
+        or check <a href="https://t.me/{{ bot_username }}">@{{ bot_username }}</a>{% endif %}.
+      </p>
+    </div>
   </div>
 {% endblock %}
 
@@ -58,33 +75,32 @@
     var fill = document.getElementById("expiry-fill");
     var expiry = document.getElementById("expiry");
     var expired = false;
+    var settled = false;
 
     function tick() {
       var leftMs = Math.max(0, expiresAt - Date.now());
       var left = Math.floor(leftMs / 1000);
-      expiry.textContent =
-        Math.floor(left / 60) + "m " + String(left % 60).padStart(2, "0") + "s";
-
+      expiry.textContent = Math.floor(left / 60) + "m " + String(left % 60).padStart(2, "0") + "s";
       var pct = Math.max(0, Math.min(100, (leftMs / TOTAL_MS) * 100));
       fill.style.width = pct + "%";
       fill.classList.toggle("is-low", pct < 20);
-
-      if (left === 0 && !expired) {
+      if (left === 0 && !expired && !settled) {
         expired = true;
         status.className = "status status-error";
         status.innerHTML =
           '<svg class="ic" aria-hidden="true"><use href="#i-clock"/></svg>' +
-          '<span>QR expired — <a href="/">create a new order</a>.</span>';
+          '<span>This code expired. <a href="/shop">Start a new order</a>.</span>';
       }
     }
     tick();
     setInterval(tick, 1000);
 
     function settle() {
+      settled = true;
       status.className = "status status-ok";
       status.innerHTML =
         '<svg class="ic" aria-hidden="true"><use href="#i-check"/></svg>' +
-        '<span>Payment received — loading your items…</span>';
+        '<span>Payment received. Opening your order…</span>';
       document.getElementById("step-pay").className = "is-done";
       document.getElementById("step-done").className = "is-active";
       setTimeout(function () { location.href = "/order/{{ order.id }}"; }, 1100);
@@ -99,7 +115,7 @@
           status.className = "status status-error";
           status.innerHTML =
             '<svg class="ic" aria-hidden="true"><use href="#i-x-circle"/></svg>' +
-            '<span>Order canceled.</span>';
+            '<span>This order was canceled.</span>';
           return;
         }
       } catch (e) { /* transient network error — keep polling */ }

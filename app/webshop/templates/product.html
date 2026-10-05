@@ -1,206 +1,183 @@
 {% extends "base.html" %}
-{% block title %}{{ o.product.name }} — Bondom Account{% endblock %}
+{% import "_ui.html" as ui with context %}
+{% block title %}{{ o.product.name }} — Bondom{% endblock %}
+{% block body_class %}no-tabbar{% endblock %}
 {% block content %}
+  {% set category = o.product.category or "Other" %}
+  {% set supplier = o.source == "pandora" %}
   <nav class="breadcrumb" aria-label="Breadcrumb">
-    <a href="/">Catalog</a>
+    <a href="/shop">Shop</a>
     <span class="sep" aria-hidden="true">/</span>
-    <span>{{ o.product.category }}</span>
+    <a href="/shop?cat={{ category | urlencode }}" style="text-transform:capitalize">{{ category }}</a>
     <span class="sep" aria-hidden="true">/</span>
     <span class="current">{{ o.product.name }}</span>
   </nav>
 
   <div class="product-layout">
-    <section class="card card-lg product-info">
-      <div class="product-title">
-        <span class="pc-media pc-media-lg" aria-hidden="true">{{ o.product.name | trim | first }}</span>
-        <div>
-          <span class="chip">{{ o.product.category }}</span>
-          <h1>{{ o.product.name }}</h1>
+    <section class="product-main" aria-labelledby="product-title">
+      <div class="product-head">
+        {{ ui.glyph(o.product.name, "p-glyph p-glyph-lg") }}
+        <div style="min-width:0">
+          <h1 id="product-title">{{ o.product.name }}</h1>
+          <div class="product-tags">
+            <a class="chip" href="/shop?cat={{ category | urlencode }}" style="text-transform:capitalize">{{ category }}</a>
+            {% if o.available <= 0 %}
+              <span class="badge badge-danger">Sold out</span>
+            {% elif show_stock %}
+              <span class="badge badge-ok"><span class="dot"></span>{{ o.available }} in stock</span>
+            {% else %}
+              <span class="badge badge-ok"><span class="dot"></span>In stock</span>
+            {% endif %}
+            {% if o.product.warranty_days %}
+              <span class="badge badge-brand">
+                <svg class="ic ic-sm" aria-hidden="true"><use href="#i-shield"/></svg>
+                {{ o.product.warranty_days }}-day warranty
+              </span>
+            {% endif %}
+          </div>
         </div>
       </div>
 
       {% if o.description %}
-        <p class="muted" style="margin-top:var(--sp-4);white-space:pre-line">{{ o.description }}</p>
+        <p class="product-desc">{{ o.description }}</p>
       {% endif %}
 
-      <div class="meta-row">
-        {% if show_stock %}
-          {% if o.available > 0 %}
-            <span class="badge badge-ok"><span class="dot"></span>{{ o.available }} in stock</span>
-          {% else %}
-            <span class="badge badge-danger">Sold out</span>
-          {% endif %}
-        {% endif %}
+      <dl class="spec-list">
+        <div><dt>Price</dt><dd class="num">${{ "%.2f" | format(o.product.price) }} per item</dd></div>
+        <div>
+          <dt>Delivery</dt>
+          <dd>
+            {% if supplier %}
+              Fulfilled by our supplier after your payment is confirmed. It appears in your order
+              and in your Telegram chat once delivered.
+            {% else %}
+              Automatic. Items appear on the order page and in your Telegram chat as soon as the
+              payment is confirmed.
+            {% endif %}
+          </dd>
+        </div>
         {% if o.product.warranty_days %}
-          <span class="badge">
-            <svg class="ic ic-sm" aria-hidden="true"><use href="#i-shield"/></svg>
-            {{ o.product.warranty_days }}-day warranty
-          </span>
+          <div><dt>Warranty</dt><dd>{{ o.product.warranty_days }} days</dd></div>
         {% endif %}
-      </div>
+        {% set supplier_cap = supplier and o.maximum_quantity < 100 %}
+        {% if purchasable and (min_qty > 1 or supplier_cap) %}
+          <div><dt>Order quantity</dt><dd class="num">
+            {% if min_qty > 1 %}At least {{ min_qty }}{% endif %}{% if min_qty > 1 and supplier_cap %}, {% endif %}{% if supplier_cap %}{{ "up" if min_qty > 1 else "Up" }} to {{ o.maximum_quantity }}{% endif %} per order
+          </dd></div>
+        {% endif %}
+        <div><dt>Payment</dt><dd>KHQR, scanned with any Cambodian banking app</dd></div>
+      </dl>
 
       {% if note %}
         <div class="note" style="margin-top:var(--sp-5)">
           <p class="note-title">
             <svg class="ic ic-sm" aria-hidden="true"><use href="#i-info"/></svg>
-            Product information
+            Before you buy
           </p>
-          {{ note }}
+          <p class="note-body">{{ note }}</p>
         </div>
       {% endif %}
-
-      <ul class="feature-list">
-        <li>
-          <svg class="ic" aria-hidden="true"><use href="#i-bolt"/></svg>
-          <span>Delivered automatically the moment your payment confirms.</span>
-        </li>
-        <li>
-          <svg class="ic" aria-hidden="true"><use href="#i-qr"/></svg>
-          <span>Pay by KHQR — ABA, ACLEDA, Wing, Bakong and more.</span>
-        </li>
-        <li>
-          <svg class="ic ic-tg" aria-hidden="true"><use href="#i-tg"/></svg>
-          <span>A copy is sent to your Telegram chat automatically.</span>
-        </li>
-        {% if o.product.warranty_days %}
-          <li>
-            <svg class="ic" aria-hidden="true"><use href="#i-shield"/></svg>
-            <span>Covered by a {{ o.product.warranty_days }}-day replacement warranty.</span>
-          </li>
-        {% endif %}
-      </ul>
     </section>
 
-    <aside class="card card-lg card-accent buy-panel" aria-label="Purchase">
-      <p class="price price-xl">${{ o.product.price }}<span class="price-unit"> / item</span></p>
+    <aside class="buy-panel" aria-label="Purchase">
+      <div class="buy-price">
+        <b>${{ "%.2f" | format(o.product.price) }}</b><span class="price-unit">per item</span>
+      </div>
 
       {% if error %}
-        <p class="alert alert-error" role="alert" style="margin-top:var(--sp-4)">
+        <p class="alert alert-error" role="alert">
           <svg class="ic" aria-hidden="true"><use href="#i-alert"/></svg>
           <span>{{ error }}</span>
         </p>
       {% endif %}
 
-      {% if session_user %}
-        {% if o.available > 0 %}
-          <form method="post" action="/web/buy" id="buy-form" style="margin-top:var(--sp-5)">
-            <input type="hidden" name="product_id" value="{{ o.product.id }}">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      {% if not purchasable %}
+        <div class="empty-state" style="padding:var(--sp-4) 0">
+          <span class="empty-icon"><svg class="ic" aria-hidden="true"><use href="#i-package"/></svg></span>
+          <h2 style="font-size:var(--fs-md)">Sold out</h2>
+          <p class="muted text-sm">This product is not available right now. Stock is added regularly.</p>
+          <a class="btn btn-outline btn-sm" href="/shop?cat={{ category | urlencode }}">More in {{ category }}</a>
+        </div>
+      {% elif session_user %}
+        <form method="post" action="/web/buy" id="buy-form" class="stack" data-submit-once="Creating order…">
+          <input type="hidden" name="product_id" value="{{ o.product.id }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 
-            <div class="field">
-              <label class="label" for="qty">Quantity</label>
-              <div class="stepper">
-                <button type="button" data-step="-1" aria-label="Decrease quantity">&minus;</button>
-                <input id="qty" type="number" name="quantity"
-                       value="{{ min_qty }}" min="{{ min_qty }}"
-                       max="{{ o.available }}" inputmode="numeric"
-                       aria-describedby="qty-hint">
-                <button type="button" data-step="1" aria-label="Increase quantity">+</button>
-              </div>
-              <p class="field-hint" id="qty-hint">
-              {{ o.available }} available{% if min_qty > 1 %} &middot;
-              minimum order {{ min_qty }}{% endif %}
+          <div class="field">
+            <label class="label" for="qty">Quantity</label>
+            <div class="stepper" data-stepper data-min="{{ min_qty }}" data-max="{{ max_qty }}"
+                 data-unit="{{ o.product.price }}" data-error="qty-error">
+              <button type="button" data-step="-1" aria-label="Decrease quantity">&minus;</button>
+              <input id="qty" type="number" name="quantity" value="{{ min_qty }}" min="{{ min_qty }}" max="{{ max_qty }}" inputmode="numeric" aria-describedby="qty-hint">
+              <button type="button" data-step="1" aria-label="Increase quantity">+</button>
+            </div>
+            {# Stock is only revealed when the admin's "show stock" setting allows it. #}
+            <p class="field-hint" id="qty-hint">
+              {%- if show_stock %}{{ o.available }} available{% if min_qty > 1 %} &middot; minimum {{ min_qty }}{% endif %}
+              {%- elif min_qty > 1 %}Minimum order {{ min_qty }}
+              {%- else %}Choose how many you need{% endif -%}
             </p>
-              <p class="field-error" id="qty-error" hidden>
-                <svg class="ic ic-sm" aria-hidden="true"><use href="#i-alert"/></svg>
-                <span></span>
-              </p>
-            </div>
-
-            <div class="total-row">
-              <span>Total</span>
-              <b id="total">${{ "%.2f" | format(o.product.price * min_qty) }}</b>
-            </div>
-
-            <button type="submit" class="btn btn-primary btn-lg btn-block">
-              <svg class="ic" aria-hidden="true"><use href="#i-qr"/></svg>
-              Pay with KHQR
-            </button>
-            <ul class="assurance-list">
-              <li>
-                <svg class="ic ic-sm" aria-hidden="true"><use href="#i-qr"/></svg>
-                You will see a QR code on the next screen.
-              </li>
-              <li>
-                <svg class="ic ic-sm" aria-hidden="true"><use href="#i-bolt"/></svg>
-                Nothing is charged until you scan it.
-              </li>
-            </ul>
-          </form>
-        {% else %}
-          <div class="empty-state" style="padding:var(--sp-6) 0">
-            <span class="empty-icon"><svg class="ic" aria-hidden="true"><use href="#i-package"/></svg></span>
-            <h3>Out of stock</h3>
-            <p class="muted">This product just sold out. Check back soon.</p>
-            <a class="btn btn-outline" href="/">Browse catalog</a>
+            <p class="field-error" id="qty-error" hidden>
+              <svg class="ic ic-sm" aria-hidden="true"><use href="#i-alert"/></svg><span></span>
+            </p>
           </div>
-        {% endif %}
+
+          <div class="total-row">
+            <span>Total &middot; <span data-qty-label>{{ min_qty }} item{{ "" if min_qty == 1 else "s" }}</span></span>
+            <b data-total>${{ "%.2f" | format(o.product.price * min_qty) }}</b>
+          </div>
+
+          <button type="submit" class="btn btn-primary btn-lg btn-block" id="buy-submit">
+            <svg class="ic" aria-hidden="true"><use href="#i-qr"/></svg>
+            Pay with KHQR
+          </button>
+          <ul class="assurance-list">
+            <li><svg class="ic ic-sm" aria-hidden="true"><use href="#i-qr"/></svg>The next screen shows a KHQR code. Nothing is charged until you scan and pay it.</li>
+            <li><svg class="ic ic-sm" aria-hidden="true"><use href="#i-clock"/></svg>The code is valid for 15 minutes.</li>
+          </ul>
+        </form>
       {% else %}
-        <div class="signin-panel" id="signin" style="margin-top:var(--sp-5);box-shadow:none;border:none;padding:0">
-          <p>Sign in with Telegram to buy this product.</p>
-          <script async src="https://telegram.org/js/telegram-widget.js?22"
-                  data-telegram-login="{{ bot_username }}"
-                  data-size="large"
-                  data-auth-url="{{ auth_url }}"
-                  data-request-access="write"></script>
+        <div class="stack-sm" id="buy-signin" style="justify-items:center;text-align:center">
+          <p class="muted text-sm">Sign in with Telegram to buy. Your order and items will also appear in the bot.</p>
+          {{ ui.tg_login(autoload=True) }}
         </div>
       {% endif %}
     </aside>
   </div>
-{% endblock %}
 
-{% block scripts %}
-{% if session_user and o.available > 0 %}
-<script>
-  (function () {
-    var unit = parseFloat("{{ o.product.price }}");
-    var max = {{ o.available }};
-    var min = {{ min_qty }};
-    var qty = document.getElementById("qty");
-    var total = document.getElementById("total");
-    var err = document.getElementById("qty-error");
-    var errText = err.querySelector("span");
+  {% if related %}
+    <section class="section" aria-labelledby="related-heading">
+      <div class="section-head">
+        <h2 id="related-heading" class="section-title">More in <span style="text-transform:capitalize">{{ category }}</span></h2>
+        <a class="section-link" href="/shop?cat={{ category | urlencode }}">View all <svg class="ic ic-sm" aria-hidden="true"><use href="#i-arrow-right"/></svg></a>
+      </div>
+      <div class="grid">
+        {% for r in related %}{{ ui.product_card(r, show_stock) }}{% endfor %}
+      </div>
+    </section>
+  {% endif %}
 
-    function clamp(showError) {
-      var raw = parseInt(qty.value, 10);
-      var v = isNaN(raw) ? 1 : raw;
-      var message = "";
-
-      if (v > max) { v = max; message = "Only " + max + " available."; }
-      else if (v < min) {
-        v = min;
-        message = "This product has a minimum order of " + min + ".";
-      }
-
-      if (v !== raw) qty.value = v;
-      total.textContent = "$" + (unit * v).toFixed(2);
-
-      var invalid = showError && message !== "";
-      err.hidden = !invalid;
-      qty.setAttribute("aria-invalid", invalid ? "true" : "false");
-      if (invalid) errText.textContent = message;
-
-      document.querySelector('[data-step="-1"]').disabled = v <= min;
-      document.querySelector('[data-step="1"]').disabled = v >= max;
-    }
-
-    document.querySelectorAll(".stepper [data-step]").forEach(function (b) {
-      b.addEventListener("click", function () {
-        qty.value = (parseInt(qty.value, 10) || min) + parseInt(b.dataset.step, 10);
-        clamp(false);
-      });
-    });
-    qty.addEventListener("input", function () { clamp(true); });
-    qty.addEventListener("blur", function () { clamp(false); });
-    clamp(false);
-
-    /* Disable on submit so a double-tap can't create two orders. */
-    document.getElementById("buy-form").addEventListener("submit", function (e) {
-      var btn = e.target.querySelector('button[type="submit"]');
-      btn.setAttribute("aria-disabled", "true");
-      btn.innerHTML = '<span class="spinner"></span> Creating order…';
-    });
-  })();
-</script>
-{% endif %}
+  {% if purchasable %}
+    {% if session_user %}
+      <div class="buy-bar" data-buy-bar="buy-submit">
+        <div>
+          <span class="meta" data-qty-label>{{ min_qty }} item{{ "" if min_qty == 1 else "s" }}</span>
+          <b style="display:block" data-total>${{ "%.2f" | format(o.product.price * min_qty) }}</b>
+        </div>
+        <button type="submit" form="buy-form" class="btn btn-primary">
+          <svg class="ic ic-sm" aria-hidden="true"><use href="#i-qr"/></svg> Pay with KHQR
+        </button>
+      </div>
+    {% else %}
+      <div class="buy-bar" data-buy-bar="buy-signin">
+        <div>
+          <span class="meta">Per item</span>
+          <b style="display:block">${{ "%.2f" | format(o.product.price) }}</b>
+        </div>
+        <button type="button" class="btn btn-tg" data-open-dialog="signin-dialog">
+          <svg class="ic ic-sm ic-tg" aria-hidden="true"><use href="#i-tg"/></svg> Sign in to buy
+        </button>
+      </div>
+    {% endif %}
+  {% endif %}
 {% endblock %}

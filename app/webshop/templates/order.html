@@ -1,126 +1,116 @@
 {% extends "base.html" %}
-{% block title %}Order #{{ order.id }} — Bondom Account{% endblock %}
+{% import "_ui.html" as ui with context %}
+{% block title %}Order #{{ order.id }} — Bondom{% endblock %}
 {% block content %}
+  {% set status = order.status.value %}
+  {% set f_status = fulfillment.status.value if fulfillment else "" %}
   <nav class="breadcrumb" aria-label="Breadcrumb">
     <a href="/my/orders">My orders</a>
     <span class="sep" aria-hidden="true">/</span>
     <span class="current">Order #{{ order.id }}</span>
   </nav>
 
-  {% if order.status.value == "delivered" %}
+  <div class="narrow-md">
+  {% if status == "delivered" %}
+    {% set animated = emoji_appearance.enabled and emoji_appearance.slots.success.enabled and emoji_appearance.slots.success.custom_emoji_id %}
     <div class="success-banner" role="status">
-      <span class="success-mark" aria-hidden="true">
-        <svg class="ic" aria-hidden="true"><use href="#i-check"/></svg>
+      <span class="success-mark{% if animated %} has-tge{% endif %}" aria-hidden="true">
+        {{ ui.anim_or_icon("success", "check", "lg") }}
       </span>
-      <div>
+      <div style="min-width:0">
         <h1>Order #{{ order.id }} delivered</h1>
         <p class="muted text-sm">
-          ${{ order.total_price }}
+          <span class="num">${{ order.total_price }}</span>
           &middot; {{ order.created_at.strftime("%d %b %Y, %H:%M") }}
-          &middot; a copy was sent to your Telegram chat
+          &middot; also sent to your Telegram chat
         </p>
       </div>
     </div>
 
-    {% for s in sections %}
-      <section class="card card-lg reveal" style="margin-bottom:var(--sp-4)">
-        <div class="row-between" style="margin-bottom:var(--sp-4)">
-          <h2 style="font-size:var(--fs-lg)">
-            <svg class="ic" aria-hidden="true" style="color:var(--text-muted)"><use href="#i-package"/></svg>
-            {{ s.name }}
-          </h2>
-          <div class="row" style="gap:var(--sp-2)">
-            {% if s.warranty %}
-              <span class="badge">
-                <svg class="ic ic-sm" aria-hidden="true"><use href="#i-shield"/></svg>
-                {{ s.warranty }}-day warranty
-              </span>
-            {% endif %}
-            <span class="badge">{{ s["items"] | length }} item{{ "s" if s["items"] | length != 1 }}</span>
+    <div class="stack">
+      {% for s in sections %}
+        <section class="card delivery" aria-labelledby="delivery-{{ loop.index }}">
+          <div class="delivery-head">
+            <h2 id="delivery-{{ loop.index }}">{{ s.name }}</h2>
+            <div class="row" style="gap:var(--sp-2)">
+              {% if s.warranty %}
+                <span class="badge badge-brand"><svg class="ic ic-sm" aria-hidden="true"><use href="#i-shield"/></svg>{{ s.warranty }}-day warranty</span>
+              {% endif %}
+              <span class="badge">{{ s["items"] | length }} item{{ "s" if s["items"] | length != 1 }}</span>
+            </div>
           </div>
-        </div>
 
-        <ul class="cred-list">
-          {% for value in s["items"] %}
-            <li class="cred-row">
-              <code>{{ value }}</code>
-              <button class="btn btn-ghost btn-sm copy-btn" data-copy="{{ value }}"
-                      aria-label="Copy item {{ loop.index }}">
+          <ul class="cred-list">
+            {% for value in s["items"] %}
+              <li class="cred-row">
+                <code>{{ value }}</code>
+                <button class="btn btn-ghost btn-sm copy-btn" type="button" data-copy="{{ value }}"
+                        aria-label="Copy item {{ loop.index }}">
+                  <svg class="ic ic-sm" aria-hidden="true"><use href="#i-copy"/></svg>
+                  <span class="copy-label">Copy</span>
+                </button>
+              </li>
+            {% endfor %}
+          </ul>
+
+          {% if s["items"] | length > 1 %}
+            <div>
+              <button class="btn btn-outline btn-sm" type="button" data-copy="{{ s['items'] | join('\n') }}">
                 <svg class="ic ic-sm" aria-hidden="true"><use href="#i-copy"/></svg>
-                <span class="copy-label">Copy</span>
+                <span class="copy-label">Copy all {{ s["items"] | length }}</span>
               </button>
-            </li>
-          {% endfor %}
-        </ul>
-
-        {% if s["items"] | length > 1 %}
-          <button class="btn btn-outline btn-sm" style="margin-top:var(--sp-3)"
-                  data-copy="{{ s['items'] | join('\n') }}">
-            <svg class="ic ic-sm" aria-hidden="true"><use href="#i-copy"/></svg>
-            <span class="copy-label">Copy all</span>
-          </button>
-        {% endif %}
-
-        {% if s.note %}
-          <div class="note" style="margin-top:var(--sp-4)">
-            <p class="note-title">
-              <svg class="ic ic-sm" aria-hidden="true"><use href="#i-alert"/></svg>
-              Important — read before use
-            </p>
-            {{ s.note }}
-          </div>
-        {% endif %}
-      </section>
-    {% endfor %}
-
-  {% elif order.status.value == "paid" %}
-    <div class="card card-lg narrow">
-      <div class="empty-state" style="padding-block:var(--sp-6)">
-        <span class="empty-icon" style="color:var(--warn)">
-          <svg class="ic" aria-hidden="true"><use href="#i-clock"/></svg>
-        </span>
-        <h1 style="font-size:var(--fs-lg)">
-          {% if fulfillment and fulfillment.status.value in ('failed', 'refunded', 'review') %}
-            Fulfillment needs attention
-          {% else %}
-            Payment received
+            </div>
           {% endif %}
-        </h1>
-        <p class="muted">
-          {% if fulfillment and fulfillment.status.value in ('failed', 'refunded', 'review') %}
-            Your payment is preserved. Support has been notified and no additional charge will be made.
-          {% else %}
-            Order #{{ order.id }} is being fulfilled. Your items will appear here after the supplier confirms delivery.
-          {% endif %}
-        </p>
-      </div>
-    </div>
 
-  {% elif order.status.value == "pending" %}
-    <div class="card card-lg narrow">
-      <div class="empty-state" style="padding-block:var(--sp-6)">
-        <span class="empty-icon" style="color:var(--warn)">
-          <svg class="ic" aria-hidden="true"><use href="#i-clock"/></svg>
-        </span>
-        <h1 style="font-size:var(--fs-lg)">Order #{{ order.id }} awaits payment</h1>
-        <p class="muted">Total ${{ order.total_price }}</p>
-        <a class="btn btn-primary btn-lg" href="/pay/{{ order.id }}">
-          <svg class="ic" aria-hidden="true"><use href="#i-qr"/></svg>
-          Open payment QR
-        </a>
+          {% if s.note %}
+            <div class="note">
+              <p class="note-title"><svg class="ic ic-sm" aria-hidden="true"><use href="#i-alert"/></svg>Read before use</p>
+              <p class="note-body">{{ s.note }}</p>
+            </div>
+          {% endif %}
+        </section>
+      {% endfor %}
+      <div class="row">
+        <a class="btn btn-outline" href="/shop">Continue shopping</a>
+        <a class="btn btn-ghost" href="/my/orders">All orders</a>
       </div>
     </div>
 
   {% else %}
-    <div class="card card-lg narrow">
+    <div class="card card-lg">
       <div class="empty-state" style="padding-block:var(--sp-6)">
-        <span class="empty-icon" style="color:var(--danger)">
-          <svg class="ic" aria-hidden="true"><use href="#i-x-circle"/></svg>
-        </span>
-        <h1 style="font-size:var(--fs-lg)">Order #{{ order.id }} canceled</h1>
-        <p class="muted">Reserved stock has been returned to the catalog.</p>
-        <a class="btn btn-primary" href="/">Back to catalog</a>
+        {% if status == "paid" %}
+          {% if f_status in ("failed", "refunded", "review") %}
+            <span class="empty-icon" style="color:var(--warn)"><svg class="ic" aria-hidden="true"><use href="#i-alert"/></svg></span>
+            <h1 style="font-size:var(--fs-xl)">Your order needs a manual check</h1>
+            <p class="muted">Payment for order #{{ order.id }} is recorded. Our supplier could not complete it automatically, so support has been notified. You will not be charged again.</p>
+          {% else %}
+            <span class="empty-icon" style="color:var(--green)">{{ ui.anim_or_icon("delivery", "clock") }}</span>
+            <h1 style="font-size:var(--fs-xl)">Payment received</h1>
+            <p class="muted">Order #{{ order.id }} is being fulfilled. Your items appear here and in your Telegram chat as soon as they are delivered.</p>
+            <p class="field-hint">This page does not refresh by itself. Reload it in a minute.</p>
+          {% endif %}
+        {% elif status == "pending" %}
+          <span class="empty-icon" style="color:var(--warn)"><svg class="ic" aria-hidden="true"><use href="#i-clock"/></svg></span>
+          <h1 style="font-size:var(--fs-xl)">Order #{{ order.id }} is waiting for payment</h1>
+          <p class="muted">Total <span class="num">${{ order.total_price }}</span>. Scan the KHQR before it expires.</p>
+          <a class="btn btn-primary btn-lg" href="/pay/{{ order.id }}">
+            <svg class="ic" aria-hidden="true"><use href="#i-qr"/></svg> Open payment code
+          </a>
+        {% else %}
+          <span class="empty-icon" style="color:var(--danger)"><svg class="ic" aria-hidden="true"><use href="#i-x-circle"/></svg></span>
+          <h1 style="font-size:var(--fs-xl)">Order #{{ order.id }} was canceled</h1>
+          <p class="muted">It was canceled before any payment was confirmed, and the reserved stock went back on sale.</p>
+          <a class="btn btn-primary" href="/shop">Back to the shop</a>
+        {% endif %}
+
+        {% if lines %}
+          <ul class="pay-lines" style="margin-top:var(--sp-4)">
+            {% for l in lines %}<li>{{ l.name }} <span class="num">&times; {{ l.quantity }}</span></li>{% endfor %}
+          </ul>
+        {% endif %}
       </div>
     </div>
   {% endif %}
+  </div>
 {% endblock %}

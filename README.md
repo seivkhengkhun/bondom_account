@@ -192,13 +192,28 @@ cd /home/ubuntu/bondom_account/app/web && nohup /home/ubuntu/bondom_account/.ven
   `if not self.authed: return`. Bot callback prefixes: `buy:`, `wb1:`,
   `chk:`, `tchk:`, `rsnd:`, `pcat:`, `pview:`, `pcats`, `cancelpay:`,
   `buy_cancel`.
-- **Storefront UI**: design tokens in `shop.css` `:root` (dark, indigo
-  accent `#6366f1`, green prices, amber notes); inline SVG sprite in
-  `base.html` (`#i-cart #i-bolt #i-shield #i-check #i-copy #i-tg #i-qr
-  #i-package`); components: `.card`, `.btn(-primary/-outline/-ghost/
-  -sm/-lg/-block)`, `.badge(.ok/.out/.warn/.warranty)`, `.chip`,
-  `.pill`, `.note`, `.alert`, `.stepper`; focus-visible outlines and
-  `prefers-reduced-motion` are respected — keep them.
+- **Storefront UI (Bondom V2, see `REDESIGN_V2.md`)**: dark-only tokens in
+  `shop.css` `:root` (canvas `#0A0D0B`, green `#22C55E` for action and
+  live state only, lime `#D9FF57` reserved for success). Receipt motif:
+  dashed `.perf` rules, tabular prices, mono `.meta` labels. Shared
+  macros in `templates/_ui.html` (`product_card`, `tge`,
+  `anim_or_icon`, `tg_login`, `glyph`) — import them `with context`.
+  Behaviour lives in `static/shop.js` (no inline handlers except page
+  polling scripts, whose element IDs are pinned by
+  `tests/test_webshop.py`). Never add a storefront route under
+  `/products`, `/orders`, `/users` or `/payments`: nginx 404s them on
+  the public domain (the catalogue is `/shop`). Focus-visible outlines,
+  44px touch targets on phones and `prefers-reduced-motion` are
+  respected — keep them.
+- **Storefront promotions**: three admin-curated slots (Admin → Marketing →
+  Website promotions) stored as `app_settings` rows
+  `storefront_promo:1..3`; they point at a product or category and are
+  skipped automatically when the target is hidden or sold out.
+- **Animated emoji on the web**: `/web/emoji/{slot}` serves the bot
+  appearance slot's sticker from a disk cache (`.cache/tg_emoji/`,
+  git-ignored). Lottie (TGS) stickers need
+  `static/vendor/lottie_light.min.js`; without it they fall back to the
+  slot's Unicode emoji.
 - **Admin UI**: Reflex/Radix theme (indigo accent, slate gray, large
   radius); helpers `card_header(icon, title, subtitle)`,
   `section_message()` callouts, `search_box()`; tables

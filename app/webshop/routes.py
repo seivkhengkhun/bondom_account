@@ -10,6 +10,7 @@ paid orders are ALSO delivered into the buyer's Telegram chat.
 import asyncio
 import base64
 import logging
+import zlib
 from pathlib import Path
 
 from aiogram import Bot
@@ -17,18 +18,21 @@ from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from shared import pandora, payment_limits, payment_service, services
+from shared import pandora, payment_limits, payment_service, services, storefront_promos
 from shared.config import settings
 from shared.database import AsyncSessionLocal
 from shared.models import OrderStatus, Product, SupplierFulfillment
 
+from . import emoji as web_emoji
 from .auth import (
     CSRF_FIELD,
+    NEXT_PARAM,
     check_csrf,
     csrf_token,
     SESSION_COOKIE,
     SESSION_TTL_SECONDS,
     read_session,
+    safe_next_path,
     sign_session,
     verify_telegram_login,
 )
@@ -36,24 +40,29 @@ from .auth import (
 logger = logging.getLogger(__name__)
 router = APIRouter(include_in_schema=False)
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+# Stable 0-4 bucket per category, used to tint product monograms so
+# categories are distinguishable at a glance (crc32: same in every process).
+templates.env.filters["tint"] = lambda name: zlib.crc32(str(name).lower().encode()) % 5
 
 _STATIC_DIR = Path(__file__).parent / "static"
 
 
 def _asset_version() -> str:
-    """Short fingerprint of the stylesheet, appended to its URL.
+    """Short fingerprint of shop.css and shop.js, appended to their URLs.
 
     Without this the browser keeps serving whatever ``shop.css`` it cached
     before the deploy, so markup ships styled by the previous release —
     which is how a redesigned component ends up rendering as raw text.
     Recomputed per call but keyed on mtime, so it is a stat() not a read.
     """
-    css = _STATIC_DIR / "shop.css"
-    try:
-        stat = css.stat()
-    except OSError:
-        return "0"
-    return f"{int(stat.st_mtime)}-{stat.st_size}"
+    parts = []
+    for name in ("shop.css", "shop.js"):
+        try:
+            stat = (_STATIC_DIR / name).stat()
+        except OSError:
+            continue
+        parts.append(f"{int(stat.st_mtime)}-{stat.st_size}")
+    return ".".join(parts) or "0"
 
 _background_tasks: set[asyncio.Task] = set()
 _bot: Bot | None = None
@@ -76,24 +85,69 @@ async def _get_bot_username() -> str:
     return _bot_username
 
 
-def _auth_url(request: Request) -> str:
+def _auth_url(request: Request, next_path: str = "") -> str:
     host = request.headers.get("host", "localhost")
     scheme = (
         "http"
         if host.startswith(("127.", "localhost", "0.0.0.0"))
         else "https"
     )
-    return f"{scheme}://{host}/auth/telegram"
+    url = f"{scheme}://{host}/auth/telegram"
+    if next_path:
+        # Telegram appends its signed fields to this URL; `next` is excluded
+        # from the signature check in auth_telegram().
+        url += "?" + urlencode({NEXT_PARAM: next_path})
+    return url
+
+
+# One-shot messages that must not survive a round trip through login.
+_LOGIN_DROP_PARAMS = {"error", "success", "login", NEXT_PARAM}
+
+
+def _login_next(request: Request) -> str:
+    """Where the Telegram login should return to: this page, or ?next=."""
+    explicit = safe_next_path(request.query_params.get(NEXT_PARAM))
+    if explicit:
+        return explicit
+    path = request.url.path
+    if path in ("/", "/logout") or path.startswith(("/auth/", "/web/")):
+        return ""
+    kept = [
+        (k, v)
+        for k, v in request.query_params.multi_items()
+        if k not in _LOGIN_DROP_PARAMS
+    ]
+    return safe_next_path(path + ("?" + urlencode(kept) if kept else ""))
 
 
 def _current_session(request: Request) -> dict | None:
     return read_session(request.cookies.get(SESSION_COOKIE))
 
 
+async def _header_balance(sess: dict | None) -> str | None:
+    """Wallet balance for the header, or None. Never breaks a page."""
+    if not sess:
+        return None
+    try:
+        async with AsyncSessionLocal() as session:
+            user = await services.get_user_by_telegram_id(session, sess["tid"])
+            if user is None:
+                return None
+            return f"{await services.get_user_balance(session, user.id):.2f}"
+    except Exception:  # noqa: BLE001 — the header is decoration, not a gate
+        logger.warning("header balance lookup failed", exc_info=True)
+        return None
+
+
 async def _render(request: Request, template: str, **context) -> HTMLResponse:
     context.setdefault("session_user", _current_session(request))
     context.setdefault("bot_username", await _get_bot_username())
-    context.setdefault("auth_url", _auth_url(request))
+    context.setdefault("auth_url", _auth_url(request, _login_next(request)))
+    context.setdefault("emoji_appearance", await web_emoji.appearance_cache.get())
+    context.setdefault("search_q", "")
+    context.setdefault("login_failed", request.query_params.get("login") == "failed")
+    if "header_balance" not in context:
+        context["header_balance"] = await _header_balance(context["session_user"])
     context.setdefault("sms_enabled", settings.sms_enabled)
     context.setdefault("csrf_token", csrf_token(_current_session(request)))
     context.setdefault("merchant", settings.merchant_name)
@@ -170,8 +224,15 @@ async def render_error(request: Request, code: int) -> HTMLResponse:
 # --------------------------------------------------------------------------- #
 @router.get("/auth/telegram")
 async def auth_telegram(request: Request) -> RedirectResponse:
-    fields = verify_telegram_login(dict(request.query_params))
+    params = dict(request.query_params)
+    # `next` is added by us to the widget's auth URL, not signed by Telegram,
+    # so it is removed before the hash check and validated on its own.
+    next_path = safe_next_path(params.pop(NEXT_PARAM, None))
+    fields = verify_telegram_login(params)
     if fields is None:
+        if next_path:
+            sep = "&" if "?" in next_path else "?"
+            return RedirectResponse(f"{next_path}{sep}login=failed")
         return RedirectResponse("/?login=failed")
 
     telegram_id = int(fields["id"])
@@ -179,7 +240,7 @@ async def auth_telegram(request: Request) -> RedirectResponse:
     async with AsyncSessionLocal() as session:
         await services.get_or_create_user(session, telegram_id, username)
 
-    response = RedirectResponse(request.query_params.get("next") or "/")
+    response = RedirectResponse(next_path or "/")
     host = request.headers.get("host", "")
     is_local = host.startswith(("127.", "localhost", "0.0.0.0"))
     response.set_cookie(
@@ -211,19 +272,124 @@ async def _catalog() -> tuple[list, bool]:
     return [o for o in overviews if o.product.is_active], show_stock
 
 
+def _category(o) -> str:
+    return o.product.category or "Other"
+
+
+def _categories(active: list) -> list[tuple[str, int]]:
+    """Real categories with product counts, largest first."""
+    counts: dict[str, int] = {}
+    for o in active:
+        counts[_category(o)] = counts.get(_category(o), 0) + 1
+    return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0].lower()))
+
+
+def _matches(o, terms: list[str]) -> bool:
+    haystack = f"{o.product.name} {_category(o)} {o.description}".lower()
+    return all(t in haystack for t in terms)
+
+
+# Server-side cap in /web/buy; the stepper must never offer more.
+_WEB_MAX_QTY = 100
+
+
+def _quantity_bounds(o, min_qty: int) -> tuple[int, int]:
+    """(minimum, maximum) a customer can actually order right now.
+
+    Combines the admin minimum, the supplier's own min/max for Pandora
+    products, live availability and the /web/buy hard cap: the same limits
+    the server enforces, so the form never offers a value it will reject.
+    """
+    lo = max(min_qty, o.minimum_quantity)
+    hi = min(o.available, _WEB_MAX_QTY)
+    if o.source == "pandora":
+        hi = min(hi, o.maximum_quantity)
+    return lo, hi
+
+
 @router.get("/", response_class=HTMLResponse)
 async def home(request: Request) -> HTMLResponse:
     active, show_stock = await _catalog()
+    async with AsyncSessionLocal() as session:
+        slots = await storefront_promos.load_slots(session)
+    promos = storefront_promos.resolve(slots, active)
+
+    # Best sellers are ranked by real units sold; with no sales yet the
+    # section is labelled as the catalogue instead of claiming popularity.
+    has_sales = any(o.sold > 0 for o in active)
+    ranked = sorted(
+        active,
+        key=lambda o: (o.available <= 0, -o.sold if has_sales else 0, o.product.id),
+    )
     grouped: dict[str, list] = {}
-    for o in active:
-        grouped.setdefault(o.product.category or "Other", []).append(o)
+    for o in sorted(active, key=lambda o: (o.available <= 0, o.product.id)):
+        grouped.setdefault(_category(o), []).append(o)
     return await _render(
         request,
         "home.html",
+        promos=promos,
+        # Small catalogues show everything once; larger ones get a top row
+        # plus per-category shelves, so no card repeats needlessly.
+        featured=ranked if len(active) <= 12 else ranked[:6],
+        show_shelves=len(active) > 12 and len(grouped) > 1,
+        has_sales=has_sales,
+        categories=_categories(active),
         grouped=grouped,
+        total=len(active),
         show_stock=show_stock,
         login_failed=request.query_params.get("login") == "failed",
         error=request.query_params.get("error", ""),
+    )
+
+
+_SORTS = {
+    "": ("Recommended", None),
+    "price-asc": ("Price: low to high", lambda o: (o.product.price, o.product.id)),
+    "price-desc": ("Price: high to low", lambda o: (-o.product.price, o.product.id)),
+    "name": ("Name A to Z", lambda o: (o.product.name.lower(), o.product.id)),
+}
+
+
+@router.get("/shop", response_class=HTMLResponse)
+async def shop(request: Request) -> HTMLResponse:
+    """Full catalogue with search, category and sort in the URL.
+
+    Not /products: nginx reserves that prefix for the internal JSON API.
+    """
+    active, show_stock = await _catalog()
+    q = (request.query_params.get("q") or "").strip()[:80]
+    cat = (request.query_params.get("cat") or "").strip()[:100]
+    sort = request.query_params.get("sort") or ""
+    if sort not in _SORTS:
+        sort = ""
+
+    categories = _categories(active)
+    if cat and cat not in dict(categories):
+        cat = ""
+    terms = q.lower().split()
+    results = [
+        o
+        for o in active
+        if (not cat or _category(o) == cat) and (not terms or _matches(o, terms))
+    ]
+    key = _SORTS[sort][1]
+    results = (
+        sorted(results, key=key)
+        if key
+        else sorted(results, key=lambda o: (o.available <= 0, o.product.id))
+    )
+    return await _render(
+        request,
+        "shop.html",
+        results=results,
+        categories=categories,
+        total=len(active),
+        q=q,
+        search_q=q,
+        cat=cat,
+        sort=sort,
+        sorts=[(k, v[0]) for k, v in _SORTS.items()],
+        show_stock=show_stock,
     )
 
 
@@ -236,12 +402,22 @@ async def product_page(request: Request, product_id: int) -> HTMLResponse:
     async with AsyncSessionLocal() as session:
         note = await services.get_product_client_note(session, product_id)
         min_qty = await services.get_product_min_quantity(session, product_id)
+    qty_min, qty_max = _quantity_bounds(selected, min_qty)
+    related = [
+        o
+        for o in active
+        if _category(o) == _category(selected) and o.product.id != product_id
+    ]
+    related.sort(key=lambda o: (o.available <= 0, -o.sold, o.product.id))
     return await _render(
         request,
         "product.html",
         o=selected,
         note=note,
-        min_qty=min_qty,
+        min_qty=qty_min,
+        max_qty=qty_max,
+        purchasable=selected.available > 0 and qty_min <= qty_max,
+        related=related[:4],
         show_stock=show_stock,
         error=request.query_params.get("error", ""),
     )
@@ -387,6 +563,7 @@ async def pay_page(request: Request, order_id: int):
 
     async with AsyncSessionLocal() as session:
         payment = await payment_service.get_latest_payment(session, order_id)
+        lines = (await services.order_lines(session, [order_id])).get(order_id, [])
     if payment is None:
         return RedirectResponse("/")
 
@@ -398,6 +575,7 @@ async def pay_page(request: Request, order_id: int):
         request,
         "pay.html",
         order=order,
+        lines=lines,
         amount=f"{payment.amount:.2f}",
         qr_b64=qr_b64,
         expires_at=expires_at,
@@ -443,12 +621,14 @@ async def order_page(request: Request, order_id: int):
                     "items": values,
                 }
             )
+        lines = (await services.order_lines(session, [order_id])).get(order_id, [])
     return await _render(
         request,
         "order.html",
         order=order,
         sections=sections,
         fulfillment=fulfillment,
+        lines=lines,
     )
 
 
@@ -469,10 +649,16 @@ async def my_orders(request: Request):
             if user
             else 0
         )
+        lines = (
+            await services.order_lines(session, [o.id for o in orders])
+            if orders
+            else {}
+        )
     return await _render(
         request,
         "orders.html",
         orders=orders,
+        lines=lines,
         balance=f"{balance:.2f}",
     )
 
@@ -481,7 +667,7 @@ async def my_orders(request: Request):
 # Wallet top-up (KHQR) — needed to fund SMS activations on the web
 # --------------------------------------------------------------------------- #
 from decimal import Decimal, InvalidOperation
-from urllib.parse import quote, quote_plus
+from urllib.parse import quote, quote_plus, urlencode
 
 from shared.models import TopupStatus
 from shared import sms_service

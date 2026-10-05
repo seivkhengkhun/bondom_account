@@ -106,13 +106,21 @@ def require_internal(
 InternalOnly = Depends(require_internal)
 
 # Customer web storefront — HTML pages sharing the same service layer.
+import mimetypes
 from pathlib import Path
+
+# Self-hosted fonts: Python's MIME table lacks these on some systems
+# (including Windows), which would serve them as the wrong type.
+mimetypes.add_type("font/ttf", ".ttf")
+mimetypes.add_type("font/woff2", ".woff2")
 
 from fastapi.staticfiles import StaticFiles
 
+from app.webshop.emoji import router as webshop_emoji_router
 from app.webshop.routes import router as webshop_router
 
 app.include_router(webshop_router)
+app.include_router(webshop_emoji_router)
 app.mount(
     "/web/static",
     StaticFiles(directory=str(Path(__file__).parent.parent / "webshop" / "static")),

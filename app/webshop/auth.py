@@ -15,6 +15,7 @@ import hashlib
 import hmac
 import json
 import time
+from urllib.parse import urlsplit
 
 from shared.config import settings
 
@@ -90,6 +91,32 @@ def check_csrf(session: dict | None, submitted: str | None) -> bool:
     if not expected or not submitted:
         return False
     return hmac.compare_digest(submitted, expected)
+
+
+# --------------------------------------------------------------------------- #
+# Post-login return path
+# --------------------------------------------------------------------------- #
+NEXT_PARAM = "next"
+
+
+def safe_next_path(value: str | None) -> str:
+    """Return ``value`` if it is a same-site path, else ``""``.
+
+    The return target arrives in the login callback's query string, which
+    anyone can craft, so only plain paths on this site are accepted:
+    ``/p/12`` yes; ``//evil.example``, backslash tricks, ``https://…`` and
+    anything with control characters no.
+    """
+    if not value or len(value) > 512 or not value.startswith("/"):
+        return ""
+    if value.startswith("//") or "\\" in value:
+        return ""
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in value):
+        return ""
+    parts = urlsplit(value)
+    if parts.scheme or parts.netloc:
+        return ""
+    return value
 
 
 def verify_telegram_login(params: dict[str, str]) -> dict[str, str] | None:

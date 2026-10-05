@@ -1,296 +1,195 @@
 {% extends "base.html" %}
+{% import "_ui.html" as ui with context %}
+{% block body_class %}page-home{% endblock %}
 {% block content %}
-  {% set total = grouped.values() | map('length') | sum %}
-  {% set in_stock = grouped.values() | sum(start=[]) | selectattr('available', 'gt', 0) | list | length %}
+  {% if error %}
+    <p class="alert alert-error" role="alert" style="margin-bottom:var(--sp-4)">
+      <svg class="ic" aria-hidden="true"><use href="#i-alert"/></svg>
+      <span>{{ error }}</span>
+    </p>
+  {% endif %}
 
-  <section class="hero">
+  <section class="hero" aria-labelledby="hero-title">
     <div class="hero-copy">
-      <p class="eyebrow">
-        <svg class="ic ic-sm" aria-hidden="true"><use href="#i-sparkle"/></svg>
-        Cambodia&rsquo;s digital account store
-      </p>
-      <h1>Premium accounts,
-        <span class="hero-gradient">delivered in seconds</span></h1>
-      <p class="hero-sub">Scan one KHQR with any Cambodian banking app. Your items
-        arrive instantly — here and in your Telegram chat.</p>
+      <p class="meta">Pay by KHQR &middot; Delivered to Telegram</p>
+      <h1 id="hero-title">Digital accounts,<br><em>paid with one scan.</em></h1>
+      <p class="hero-sub">Pick a product, scan the KHQR with your banking app, and your items
+        show up here and in your Telegram chat.</p>
 
-      <ul class="trust-row">
-        <li><svg class="ic ic-sm" aria-hidden="true"><use href="#i-bolt"/></svg> Instant delivery</li>
-        <li><svg class="ic ic-sm" aria-hidden="true"><use href="#i-qr"/></svg> KHQR — every bank</li>
-        <li><svg class="ic ic-sm" aria-hidden="true"><use href="#i-shield"/></svg> Warranty included</li>
-        <li><svg class="ic ic-sm ic-tg" aria-hidden="true"><use href="#i-tg"/></svg> Synced with Telegram</li>
-      </ul>
+      <form class="hero-search" action="/shop" method="get" role="search">
+        <div class="search-field">
+          <svg class="ic ic-search" aria-hidden="true"><use href="#i-search"/></svg>
+          <label class="sr-only" for="hero-q">What are you looking for?</label>
+          <input class="input" id="hero-q" name="q" type="search" autocomplete="off"
+                 placeholder="What are you looking for?" enterkeyhint="search">
+          <button class="search-submit" type="submit" aria-label="Search">
+            <svg class="ic ic-sm" aria-hidden="true"><use href="#i-arrow-right"/></svg>
+          </button>
+        </div>
+      </form>
 
-      <div class="hero-actions">
-        <a class="btn btn-primary btn-lg" href="#catalog">
-          <svg class="ic ic-sm" aria-hidden="true"><use href="#i-bag"/></svg>
-          Browse the catalog
-        </a>
-        {% if sms_enabled %}
-          <a class="btn btn-outline btn-lg" href="/sms">
-            <svg class="ic ic-sm" aria-hidden="true"><use href="#i-phone"/></svg>
-            SMS numbers
-          </a>
-        {% endif %}
-      </div>
-
-      {% if error %}
-        <p class="alert alert-error" role="alert" style="max-width:32rem">
-          <svg class="ic" aria-hidden="true"><use href="#i-alert"/></svg>
-          <span>{{ error }}</span>
+      {% if total %}
+        <p class="hero-index meta">
+          <span>{{ total }} product{{ "" if total == 1 else "s" }}</span>
+          <span aria-hidden="true">/</span>
+          <span>{{ categories | length }} categor{{ "y" if categories | length == 1 else "ies" }}</span>
+          <a href="/shop">Browse all <svg class="ic ic-sm" aria-hidden="true"><use href="#i-arrow-right"/></svg></a>
         </p>
       {% endif %}
     </div>
 
-    {% if not session_user %}
-      {# Signed out: the strongest position on the page belongs to sign-in. #}
-      <div class="signin-panel" id="signin">
-        <span class="empty-icon" aria-hidden="true">
-          <svg class="ic ic-tg"><use href="#i-tg"/></svg>
-        </span>
-        <h2 style="font-size:var(--fs-lg)">Sign in with Telegram</h2>
-        <p>One tap — no password. Your wallet and orders stay in sync across
-          the website and the bot.</p>
-        <script async src="https://telegram.org/js/telegram-widget.js?22"
-                data-telegram-login="{{ bot_username }}"
-                data-size="large"
-                data-auth-url="{{ auth_url }}"
-                data-request-access="write"></script>
-        {% if login_failed %}
-          <p class="alert alert-error" role="alert">
-            <svg class="ic" aria-hidden="true"><use href="#i-alert"/></svg>
-            <span>Login failed — please try again.</span>
-          </p>
-        {% endif %}
+    {# The Bondom receipt: the store's three real facts printed as receipt
+       lines, with the account (or sign-in) as the receipt's footer. #}
+    <aside class="hero-aside receipt{% if session_user %} hero-aside--account{% endif %}" aria-label="How buying works and your account">
+      <div class="receipt-head">
+        <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9" fill="#22C55E"/><path d="M11.5 7.5v17" stroke="#052E16" stroke-width="4" stroke-linecap="round"/><circle cx="17.5" cy="18.5" r="5.5" fill="none" stroke="#052E16" stroke-width="4"/></svg>
+        <span class="meta">How buying works</span>
+        <span class="receipt-tag">KHQR</span>
       </div>
-    {% else %}
-      {# Signed in: sign-in would be noise, so the slot shows the catalogue
-         at a glance instead. #}
-      <div class="hero-panel">
-        <div class="hero-panel-head">
-          <h2 style="font-size:var(--fs-lg)">In the store today</h2>
-          <span class="badge badge-ok"><span class="dot dot-live"></span>Live</span>
-        </div>
 
-        <div class="stat-strip">
-          <div class="stat">
-            <span class="stat-value">{{ total }}</span>
-            <span class="stat-label">Products</span>
+      <ol class="facts">
+        <li class="fact">
+          <span class="fact-icon"><svg class="ic ic-sm" aria-hidden="true"><use href="#i-qr"/></svg></span>
+          <div><b>KHQR from any bank app</b><span>ABA, ACLEDA, Wing, Bakong and other KHQR apps.</span></div>
+          <span class="fact-no" aria-hidden="true">01</span>
+        </li>
+        <li class="fact">
+          <span class="fact-icon"><svg class="ic ic-sm ic-tg" aria-hidden="true"><use href="#i-tg"/></svg></span>
+          <div><b>A copy in your Telegram chat</b><span>Delivered items are sent{% if bot_username %} by @{{ bot_username }}{% endif %} as well as shown here.</span></div>
+          <span class="fact-no" aria-hidden="true">02</span>
+        </li>
+        <li class="fact">
+          <span class="fact-icon"><svg class="ic ic-sm" aria-hidden="true"><use href="#i-wallet"/></svg></span>
+          <div><b>One account, two places</b><span>Wallet and orders are shared with the Telegram bot.</span></div>
+          <span class="fact-no" aria-hidden="true">03</span>
+        </li>
+      </ol>
+
+      <hr class="perf">
+
+      {% if session_user %}
+        <div class="receipt-foot">
+          <div class="aside-head">
+            <span class="avatar" style="width:2.5rem;height:2.5rem;font-size:1.35rem">{{ ui.anim_or_icon("account", "user") }}</span>
+            <div style="min-width:0">
+              <span class="meta">Signed in</span>
+              <h2 style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ session_user.u or session_user.tid }}</h2>
+            </div>
+            {% if header_balance is not none %}
+              <div class="receipt-total">
+                <span class="meta">Wallet</span>
+                <b>${{ header_balance }}</b>
+              </div>
+            {% endif %}
           </div>
-          <div class="stat">
-            <span class="stat-value">{{ in_stock }}</span>
-            <span class="stat-label">In stock</span>
-          </div>
-          <div class="stat">
-            <span class="stat-value">{{ grouped | length }}</span>
-            <span class="stat-label">Categories</span>
+          <div class="row" style="gap:var(--sp-2)">
+            <a class="btn btn-primary btn-sm" href="/shop">Browse products</a>
+            <a class="btn btn-outline btn-sm" href="/my/orders">My orders</a>
+            <a class="btn btn-ghost btn-sm" href="/wallet"><svg class="ic ic-sm" aria-hidden="true"><use href="#i-plus"/></svg> Top up</a>
           </div>
         </div>
-
-        <ul class="how-steps how-steps-stacked">
-          <li class="how-step">
-            <span class="how-num">1</span>
+      {% else %}
+        <div class="receipt-foot">
+          <div class="aside-head">
+            <span class="avatar" style="width:2.5rem;height:2.5rem;font-size:1.35rem;color:var(--green)">{{ ui.anim_or_icon("shop", "bag") }}</span>
             <div>
-              <h3>Pick an item</h3>
-              <p>Choose a product and quantity from the catalog below.</p>
+              <h2>Sign in to buy</h2>
+              <p class="muted text-sm">Telegram, one tap, no password.</p>
             </div>
-          </li>
-          <li class="how-step">
-            <span class="how-num">2</span>
-            <div>
-              <h3>Scan the KHQR</h3>
-              <p>Any Cambodian banking app — ABA, ACLEDA, Wing, Bakong.</p>
-            </div>
-          </li>
-          <li class="how-step">
-            <span class="how-num">3</span>
-            <div>
-              <h3>Get it instantly</h3>
-              <p>Delivered on screen and to your Telegram chat.</p>
-            </div>
-          </li>
-        </ul>
-      </div>
-    {% endif %}
+          </div>
+          {{ ui.tg_login(autoload=True) }}
+        </div>
+      {% endif %}
+    </aside>
   </section>
 
-  <section aria-labelledby="catalog-heading" id="catalog">
-    <div class="section-head">
-      <div>
-        <h2 id="catalog-heading" class="section-title">Catalog</h2>
-        <p class="section-sub">Every item is delivered automatically the moment payment confirms.</p>
+  {% if total == 0 %}
+    <div class="card card-lg">
+      <div class="empty-state">
+        <span class="empty-icon">{{ ui.anim_or_icon("shop", "bag") }}</span>
+        <h2 style="font-size:var(--fs-lg)">The store is being restocked</h2>
+        <p class="muted">No products are listed right now. Check back soon{% if bot_username %}, or follow
+          <a href="https://t.me/{{ bot_username }}">@{{ bot_username }}</a> for updates{% endif %}.</p>
       </div>
     </div>
-
-    <div class="catalog-toolbar">
-      <div class="search-field">
-        <svg class="ic ic-search" aria-hidden="true"><use href="#i-search"/></svg>
-        <label class="sr-only" for="catalog-search">Search products</label>
-        <input class="input" id="catalog-search" type="search" autocomplete="off"
-               placeholder="Search products…" enterkeyhint="search">
-        <button class="search-clear" id="catalog-search-clear" type="button"
-                aria-label="Clear search" hidden>
-          <svg class="ic ic-sm" aria-hidden="true"><use href="#i-close"/></svg>
-        </button>
+  {% else %}
+    <section class="section" aria-labelledby="cat-heading">
+      <div class="section-head">
+        <h2 id="cat-heading" class="section-title">Categories</h2>
+        <a class="section-link" href="/shop">All {{ total }} products <svg class="ic ic-sm" aria-hidden="true"><use href="#i-arrow-right"/></svg></a>
       </div>
-
-      <div class="filter-bar" role="tablist" aria-label="Product categories">
-        <button class="pill" data-cat="*" role="tab" aria-selected="true">
-          All <span class="pill-count">{{ total }}</span>
-        </button>
-        {% for category, items in grouped.items() %}
-          <button class="pill" data-cat="{{ category }}" role="tab" aria-selected="false">
-            {{ category }} <span class="pill-count">{{ items | length }}</span>
-          </button>
-        {% endfor %}
-      </div>
-
-      <p class="catalog-count" id="catalog-count" aria-live="polite">
-        {{ total }} item{{ '' if total == 1 else 's' }}
-      </p>
-    </div>
-
-    <div class="grid" id="product-grid">
-      {% for category, items in grouped.items() %}
-        {% for o in items %}
-          <a class="card card-interactive product-card reveal"
-             href="/p/{{ o.product.id }}"
-             data-cat="{{ category }}"
-             data-name="{{ o.product.name | lower }} {{ category | lower }}">
-            <div class="pc-top">
-              <span class="chip">{{ category }}</span>
-              {% if show_stock %}
-                {% if o.available > 0 %}
-                  <span class="badge badge-ok"><span class="dot"></span>{{ o.available }} in stock</span>
-                {% else %}
-                  <span class="badge badge-danger">Sold out</span>
-                {% endif %}
-              {% endif %}
-            </div>
-
-            <div class="pc-head">
-              <span class="pc-media" aria-hidden="true">{{ o.product.name | trim | first }}</span>
-              <h3>{{ o.product.name }}</h3>
-            </div>
-
-            {% if o.product.warranty_days %}
-              <span class="badge badge-brand">
-                <svg class="ic ic-sm" aria-hidden="true"><use href="#i-shield"/></svg>
-                {{ o.product.warranty_days }}-day warranty
-              </span>
-            {% endif %}
-
-            <div class="pc-foot">
-              <span class="price price-lg">${{ o.product.price }}</span>
-              <span class="pc-cta">
-                {% if o.available > 0 %}Buy{% else %}View{% endif %}
-                <svg class="ic ic-sm" aria-hidden="true"><use href="#i-arrow-right"/></svg>
-              </span>
-            </div>
+      <nav class="cat-rail" aria-label="Product categories">
+        <a class="cat-tile" href="/shop">
+          <span class="cat-glyph"><svg class="ic ic-sm" aria-hidden="true"><use href="#i-grid"/></svg></span>
+          <span class="cat-label"><b>All products</b><span class="meta">{{ total }} items</span></span>
+        </a>
+        {% for name, count in categories %}
+          <a class="cat-tile" href="/shop?cat={{ name | urlencode }}">
+            <span class="cat-glyph tint-{{ name | tint }}">{{ name[:1] }}</span>
+            <span class="cat-label"><b>{{ name }}</b><span class="meta">{{ count }} item{{ "" if count == 1 else "s" }}</span></span>
           </a>
         {% endfor %}
+      </nav>
+    </section>
+
+    {% if promos %}
+      <section class="section" aria-label="Featured">
+        <div class="promos" data-count="{{ promos | length }}">
+          {% for p in promos %}
+            <a class="promo promo--{{ p.tone }}" href="{{ p.href }}">
+              <div class="promo-copy">
+                <span class="meta promo-kicker">{% if p.price is not none %}{{ p.meta }}{% else %}Category{% endif %}</span>
+                <span class="promo-title">{{ p.title }}</span>
+                {% if p.subtitle %}<span class="promo-sub">{{ p.subtitle }}</span>{% endif %}
+                <span class="promo-cta">{{ p.cta_label }} <svg class="ic ic-sm" aria-hidden="true"><use href="#i-arrow-right"/></svg></span>
+              </div>
+              <div class="promo-art" aria-hidden="true">
+                <span class="promo-emblem">
+                  {%- if p.emoji_slot %}{{ ui.tge(p.emoji_slot, "xl") }}{% else %}<svg class="ic"><use href="#i-{{ 'bag' if p.price is not none else 'grid' }}"/></svg>{% endif -%}
+                </span>
+                <span class="promo-stub">
+                  {%- if p.price is not none %}${{ "%.2f" | format(p.price) }}{% else %}{{ p.meta }}{% endif -%}
+                </span>
+              </div>
+            </a>
+          {% endfor %}
+        </div>
+      </section>
+    {% endif %}
+
+    <section class="section" aria-labelledby="featured-heading">
+      <div class="section-head">
+        <div>
+          <h2 id="featured-heading" class="section-title">{% if has_sales %}Best sellers{% else %}In the store{% endif %}</h2>
+          {% if has_sales %}<p class="section-sub">Ranked by units sold.</p>{% endif %}
+        </div>
+        <a class="section-link" href="/shop">View all <svg class="ic ic-sm" aria-hidden="true"><use href="#i-arrow-right"/></svg></a>
+      </div>
+      <div class="grid">
+        {% for o in featured %}
+          {{ ui.product_card(o, show_stock, "Best seller" if has_sales and loop.index <= 3 and o.sold > 0 else "") }}
+        {% endfor %}
+      </div>
+    </section>
+
+    {% if show_shelves %}
+      {% for name, count in categories %}
+        {% set items = grouped[name] %}
+        <section class="section shelf" aria-labelledby="shelf-{{ loop.index }}">
+          <div class="section-head">
+            <div>
+              <h2 id="shelf-{{ loop.index }}" class="section-title" style="text-transform:capitalize">{{ name }}</h2>
+              <p class="section-sub">{{ count }} product{{ "" if count == 1 else "s" }}</p>
+            </div>
+            {% if count > 6 %}
+              <a class="section-link" href="/shop?cat={{ name | urlencode }}">View all <svg class="ic ic-sm" aria-hidden="true"><use href="#i-arrow-right"/></svg></a>
+            {% endif %}
+          </div>
+          <div class="grid">
+            {% for o in items[:6] %}{{ ui.product_card(o, show_stock) }}{% endfor %}
+          </div>
+        </section>
       {% endfor %}
-    </div>
-
-    <div class="empty-state" id="empty-msg" hidden>
-      <span class="empty-icon"><svg class="ic" aria-hidden="true"><use href="#i-search"/></svg></span>
-      <h3>No products match</h3>
-      <p class="muted">Try a different search or category — new stock is added regularly.</p>
-      <button class="btn btn-outline btn-sm" type="button" id="reset-filters">
-        <svg class="ic ic-sm" aria-hidden="true"><use href="#i-refresh"/></svg>
-        Clear filters
-      </button>
-    </div>
-  </section>
-
-  <section class="how-band reveal" aria-labelledby="how-heading">
-    <h2 id="how-heading" class="section-title">Buying takes under a minute</h2>
-    <ul class="how-steps">
-      <li class="how-step">
-        <span class="how-num">1</span>
-        <div>
-          <h3>Choose</h3>
-          <p>Pick a product and quantity. The price you see is the price you pay.</p>
-        </div>
-      </li>
-      <li class="how-step">
-        <span class="how-num">2</span>
-        <div>
-          <h3>Pay by KHQR</h3>
-          <p>Scan with ABA, ACLEDA, Wing, Bakong or any Cambodian banking app.</p>
-        </div>
-      </li>
-      <li class="how-step">
-        <span class="how-num">3</span>
-        <div>
-          <h3>Receive</h3>
-          <p>Your credentials appear on screen the second the payment confirms.</p>
-        </div>
-      </li>
-      <li class="how-step">
-        <span class="how-num">4</span>
-        <div>
-          <h3>Keep a copy</h3>
-          <p>Everything is mirrored to your Telegram chat and to My Orders.</p>
-        </div>
-      </li>
-    </ul>
-  </section>
-{% endblock %}
-
-{% block scripts %}
-<script>
-  (function () {
-    var pills = document.querySelectorAll(".filter-bar .pill");
-    var cards = Array.prototype.slice.call(document.querySelectorAll(".product-card"));
-    var empty = document.getElementById("empty-msg");
-    var count = document.getElementById("catalog-count");
-    var search = document.getElementById("catalog-search");
-    var clear = document.getElementById("catalog-search-clear");
-    var reset = document.getElementById("reset-filters");
-    var cat = "*";
-
-    /* Category and search are one filter applied together, so switching
-       category never silently discards what was typed. */
-    function apply() {
-      var q = (search.value || "").trim().toLowerCase();
-      var shown = 0;
-      cards.forEach(function (card) {
-        var show =
-          (cat === "*" || card.dataset.cat === cat) &&
-          (q === "" || (card.dataset.name || "").indexOf(q) !== -1);
-        card.hidden = !show;
-        if (show) shown++;
-      });
-      empty.hidden = shown > 0;
-      count.textContent = shown + (shown === 1 ? " item" : " items");
-      clear.hidden = q === "";
-    }
-
-    pills.forEach(function (pill) {
-      pill.addEventListener("click", function () {
-        pills.forEach(function (p) { p.setAttribute("aria-selected", "false"); });
-        pill.setAttribute("aria-selected", "true");
-        cat = pill.dataset.cat;
-        apply();
-      });
-    });
-
-    search.addEventListener("input", apply);
-    search.addEventListener("search", apply);
-    clear.addEventListener("click", function () {
-      search.value = "";
-      search.focus();
-      apply();
-    });
-    reset.addEventListener("click", function () {
-      search.value = "";
-      cat = "*";
-      pills.forEach(function (p) {
-        p.setAttribute("aria-selected", String(p.dataset.cat === "*"));
-      });
-      apply();
-    });
-  })();
-</script>
+    {% endif %}
+  {% endif %}
 {% endblock %}

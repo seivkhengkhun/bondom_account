@@ -1,0 +1,87 @@
+{# Shared storefront macros. Import with context:
+     {% import "_ui.html" as ui with context %}
+#}
+
+{# Animated Telegram emoji from a bot appearance slot. The Unicode fallback
+   is always in the HTML; shop.js swaps in the sticker when one is
+   configured, enabled and loads. Decorative: hidden from screen readers. #}
+{% macro tge(key, size="") -%}
+  {%- set slot = emoji_appearance.slots.get(key) -%}
+  {%- if slot -%}
+    {%- set live = emoji_appearance.enabled and slot.enabled and slot.custom_emoji_id -%}
+    <span class="tge{% if size %} tge-{{ size }}{% endif %}" aria-hidden="true"
+      {%- if live %} data-tge-src="/web/emoji/{{ key }}?v={{ slot.custom_emoji_id }}"{% endif %}>{{ slot.fallback_emoji }}</span>
+  {%- endif -%}
+{%- endmacro %}
+
+{# The slot's animated sticker when an admin configured one, otherwise a
+   design-system icon. Used for moments (confirmations, empty states)
+   where a platform Unicode glyph would look out of place. #}
+{% macro anim_or_icon(key, icon, size="") -%}
+  {%- set slot = emoji_appearance.slots.get(key) -%}
+  {%- if slot and emoji_appearance.enabled and slot.enabled and slot.custom_emoji_id -%}
+    {{ tge(key, size) }}
+  {%- else -%}
+    <svg class="ic" aria-hidden="true"><use href="#i-{{ icon }}"/></svg>
+  {%- endif -%}
+{%- endmacro %}
+
+{# Two-letter monogram: products have no images, so a consistent typographic
+   tile anchors each card instead of mismatched pictures. #}
+{% macro glyph(name, cls="p-glyph") -%}
+  {%- set words = (name or "?").replace("-", " ").split() -%}
+  {%- set a = words[0][:1] if words else "?" -%}
+  {%- set b = words[1][:1] if words | length > 1 else (words[0][1:2] if words else "") -%}
+  <span class="{{ cls }}" aria-hidden="true">{{ (a ~ b) | upper }}</span>
+{%- endmacro %}
+
+{# Telegram Login Widget mount point. shop.js injects Telegram's script
+   (immediately with autoload, or when a dialog opens). #}
+{% macro tg_login(autoload=False) -%}
+  <div class="tg-login" data-telegram-login="{{ bot_username }}"
+       data-auth-url="{{ auth_url }}"{% if autoload %} data-autoload{% endif %}></div>
+{%- endmacro %}
+
+{# Secondary line under a product name: the facts that tell two similar
+   products apart. Only real data — nothing is shown that isn't stored. #}
+{% macro product_meta(o) -%}
+  {%- set bits = [o.product.category or "Other"] -%}
+  {%- if o.product.warranty_days %}{% set _ = bits.append(o.product.warranty_days ~ "d warranty") %}{% endif -%}
+  {%- if o.minimum_quantity > 1 %}{% set _ = bits.append("min " ~ o.minimum_quantity) %}{% endif -%}
+  {{ bits | join(" · ") }}
+{%- endmacro %}
+
+{% macro product_card(o, show_stock=True, flag="") -%}
+  {%- set out = o.available <= 0 -%}
+  <a class="p-card{% if out %} is-out{% endif %}" href="/p/{{ o.product.id }}"
+     data-filter-name="{{ (o.product.name ~ ' ' ~ (o.product.category or '')) | lower }}">
+    <div class="p-top">
+      {{ glyph(o.product.name, "p-glyph tint-" ~ ((o.product.category or "Other") | tint)) }}
+      {% if out %}
+        <span class="badge badge-danger">Sold out</span>
+      {% elif flag %}
+        <span class="p-flag">{{ flag }}</span>
+      {% endif %}
+    </div>
+    <div class="p-body">
+      <h3 class="p-name">{{ o.product.name }}</h3>
+      <p class="p-meta meta">{{ product_meta(o) }}</p>
+    </div>
+    <div class="p-foot">
+      <div class="stack-sm" style="gap:0.1rem">
+        <span class="p-price">${{ "%.2f" | format(o.product.price) }}</span>
+        {% if not out %}
+          {% if show_stock %}
+            <span class="p-stock ok"><span class="dot"></span><span>{{ o.available }} in stock</span></span>
+          {% else %}
+            <span class="p-stock ok"><span class="dot"></span><span>In stock</span></span>
+          {% endif %}
+        {% endif %}
+      </div>
+      <span class="p-go" aria-hidden="true">
+        <svg class="ic ic-sm"><use href="#i-arrow-right"/></svg>
+      </span>
+      <span class="sr-only">{% if out %}View{% else %}Buy{% endif %} {{ o.product.name }}</span>
+    </div>
+  </a>
+{%- endmacro %}
